@@ -979,7 +979,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
     if ( peer->punch_start_time != 0 ) return;  /* already in progress */
 
     int punched = 0;
-    
+
     /* Try IPv4 punch if available */
     if ( peer->sock.family == AF_INET ) {
         /* Don't punch if same public IP (same LAN) - handled separately */
@@ -993,7 +993,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
                        macaddr_str(mac_tmp, peer->mac_addr));
         }
     }
-    
+
     /* Try IPv6 punch if available and we have IPv6 socket */
     if ( peer->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
         send_probe(eee, &peer->sock6, peer->mac_addr);
@@ -1001,7 +1001,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
         traceEvent(TRACE_INFO, "IPv6 hole-punch started for %s",
                    macaddr_str(mac_tmp, peer->mac_addr));
     }
-    
+
     if (punched) {
         peer->punch_start_time = n2n_now();
         peer->last_punch_probe = peer->punch_start_time;
@@ -1044,19 +1044,19 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
         {
             /* Retransmit PROBE every 1s for first 5s */
             int sent_probe = 0;
-            
+
             /* Try IPv4 if available */
             if ( scan->sock.family == AF_INET && eee->udp_sock != -1 ) {
                 send_probe(eee, &scan->sock, scan->mac_addr);
                 sent_probe = 1;
             }
-            
+
             /* Try IPv6 if available */
             if ( scan->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
                 send_probe(eee, &scan->sock6, scan->mac_addr);
                 sent_probe = 1;
             }
-            
+
             if (sent_probe) {
                 scan->last_punch_probe = now;
             }
@@ -1144,7 +1144,7 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
         } else if ( scan->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
             keepalive_addr = &scan->sock6;
         }
-        
+
         if ( !keepalive_addr ) {
             /* No valid address for keepalive */
             prev = scan;
@@ -1271,14 +1271,14 @@ void try_send_register( n2n_edge_t * eee,
         }
 
         memcpy(scan->mac_addr, mac, N2N_MAC_SIZE);
-        
+
         /* Store address in correct slot based on family - don't clear the other */
         if (peer->family == AF_INET6) {
             scan->sock6 = *peer;
         } else {
             scan->sock = *peer;
         }
-        
+
         scan->last_seen = n2n_now();
         scan->punch_start_time = 0;
         scan->punch_failed = 0;
@@ -1302,7 +1302,7 @@ void try_send_register( n2n_edge_t * eee,
     } else {
         /* Already pending: update address based on family - preserve other family */
         n2n_sock_t *target_sock = (peer->family == AF_INET6) ? &scan->sock6 : &scan->sock;
-        
+
         if ( sock_equal(target_sock, peer) != 0 ) {
             *target_sock = *peer;
             scan->num_sockets = 1;
@@ -1459,14 +1459,23 @@ void set_peer_operational( n2n_edge_t * eee,
             memset(&scan->sock6, 0, sizeof(n2n_sock_t));  /* Clear IPv6 completely */
         }
         scan->last_seen = n2n_now();
-        scan->punch_start_time = 0;  /* stop punch activity */
+        scan->punch_start_time = 0;
         scan->punch_failed = 0;
-        scan->first_seen   = 0; /* reset so first real packet triggers log */
 
-        traceEvent( TRACE_NORMAL, "P2P established with %s at %s (%s)",
-                    PEER_ID(mac_buf, scan),
-                    sock_to_cstr( sockbuf, peer ),
-                    (peer->family == AF_INET6) ? "IPv6" : "IPv4" );
+        /* Report P2P connection */
+        if ( scan->first_seen != 1 ) {
+            char mac_buf[18];
+            n2n_sock_str_t sockbuf;
+            if ( scan->first_seen == 0 ) {
+                traceEvent( TRACE_NORMAL, "P2P direct with %s at %s (%s)",
+                            PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ),
+                            (peer->family == AF_INET6) ? "IPv6" : "IPv4" );
+            } else {
+                traceEvent( TRACE_NORMAL, "Connection upgraded to P2P with %s at %s",
+                            PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ));
+            }
+            scan->first_seen = 1;
+        }
 
         /* Send REGISTER back to confirm our new address to the peer */
         send_register( eee, peer );
@@ -1503,17 +1512,17 @@ void set_peer_operational( n2n_edge_t * eee,
             /* Peer already operational. Check if we should upgrade to IPv4 (more reliable) */
             int current_is_ipv6 = (scan->sock6.family == AF_INET6 && scan->sock.family == 0);
             int new_is_ipv4 = (peer->family == AF_INET);
-            
+
             if (current_is_ipv6 && new_is_ipv4) {
                 /* Upgrade from IPv6 to IPv4 (better NAT traversal) */
                 scan->sock = *peer;
                 memset(&scan->sock6, 0, sizeof(n2n_sock_t));  /* Clear IPv6 completely */
                 scan->last_seen = n2n_now();
-                
+
                 traceEvent( TRACE_NORMAL, "P2P upgraded to IPv4 for %s at %s (was IPv6)",
                             PEER_ID(mac_buf, scan),
                             sock_to_cstr( sockbuf, peer ) );
-                
+
                 /* Send REGISTER to confirm new address */
                 send_register( eee, peer );
             } else {
@@ -1618,7 +1627,7 @@ static void update_peer_address(n2n_edge_t * eee,
     /* Determine which address this peer is using (only ONE active) */
     n2n_sock_t *active_sock = NULL;
     int active_is_ipv4 = 0;
-    
+
     if (scan->sock.family == AF_INET) {
         active_sock = &scan->sock;
         active_is_ipv4 = 1;
@@ -1626,17 +1635,17 @@ static void update_peer_address(n2n_edge_t * eee,
         active_sock = &scan->sock6;
         active_is_ipv4 = 0;
     }
-    
+
     if (!active_sock) {
         /* No active address - shouldn't happen for known_peers */
         traceEvent(TRACE_WARNING, "update_peer_address: peer %s has no active address",
                    macaddr_str(mac_buf, mac));
         return;
     }
-    
+
     /* Only update if incoming packet matches the active protocol family */
     int incoming_is_ipv4 = (peer->family == AF_INET);
-    
+
     if (active_is_ipv4 != incoming_is_ipv4) {
         /* Incoming packet uses different protocol than established connection.
          * This can happen if:
@@ -1650,7 +1659,7 @@ static void update_peer_address(n2n_edge_t * eee,
         scan->last_seen = when;  /* Still update last_seen */
         return;
     }
-    
+
     /* Same protocol family: update address if changed */
     if ( 0 != sock_equal( active_sock, peer))
     {
@@ -1708,12 +1717,12 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
         traceEvent(TRACE_WARNING, "Supernode not responding - moving to %u of %u",
                    (unsigned int)eee->sn_idx, (unsigned int)eee->sn_num);
         eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
-        
+
         /* Re-resolve supernode address when switching to a different supernode */
         if(eee->re_resolve_supernode_ip)
         {
             supernode2addr(&(eee->supernode), eee->sn_af, eee->sn_ip_array[eee->sn_idx]);
-            
+
             /* Clear alternate address - it will be resolved naturally if domain has both A and AAAA */
             memset(&eee->supernode_alt, 0, sizeof(n2n_sock_t));
         }
@@ -1760,7 +1769,7 @@ static int find_peer_destination(n2n_edge_t * eee,
             if (scan->last_probe_sent > 0 && (now - scan->last_seen) > KEEPALIVE_TOTAL_TIMEOUT) {
                 break; /* retval stays 0, use supernode as fallback */
             }
-            
+
             /* Single-channel routing: prefer IPv4 if available, fallback to IPv6 */
             /* Each peer uses only ONE protocol stack (IPv4 or IPv6) */
             /* IPv4 is more mature and has better NAT traversal reliability */
@@ -1772,7 +1781,7 @@ static int find_peer_destination(n2n_edge_t * eee,
                 /* No valid direct address available */
                 break;
             }
-            
+
             retval=1;
             break;
         }
@@ -2092,15 +2101,26 @@ static int handle_PACKET( n2n_edge_t * eee,
     if (NULL == scan) {
         try_send_register(eee, from_supernode, pkt->srcMac, orig_sender);
     } else if (!from_supernode) {
-        /* P2P packet from known peer: reset keepalive state and update address if same family */
+        /* P2P packet: check for downgrade before updating address */
+        if ( scan->first_seen == 1 ) {
+            n2n_sock_t *expected = (scan->sock.family == AF_INET) ? &scan->sock : &scan->sock6;
+            if ( 0 != sock_equal(expected, orig_sender) && scan->assigned_ip ) {
+                char vip[INET_ADDRSTRLEN];
+                struct in_addr a = { .s_addr = htonl(scan->assigned_ip) };
+                inet_ntop(AF_INET, &a, vip, sizeof(vip));
+                traceEvent(TRACE_WARNING, "Connection downgraded to relay with %s", vip);
+                scan->first_seen = 2;
+            }
+        }
+
         scan->last_probe_sent = 0;
         scan->keepalive_fails = 0;
-        
+
         /* Check which protocol this peer is using */
         int peer_uses_ipv4 = (scan->sock.family == AF_INET);
         int peer_uses_ipv6 = (scan->sock6.family == AF_INET6);
         int packet_is_ipv4 = (orig_sender->family == AF_INET);
-        
+
         /* Only update if packet matches peer's active protocol */
         if ((peer_uses_ipv4 && packet_is_ipv4) || (peer_uses_ipv6 && !packet_is_ipv4)) {
             n2n_sock_t *expected_sock = peer_uses_ipv4 ? &scan->sock : &scan->sock6;
@@ -2153,22 +2173,6 @@ static int handle_PACKET( n2n_edge_t * eee,
                     if ( !sp ) sp = find_peer_by_mac(eee->pending_peers, pkt->srcMac);
                     if ( sp && sp->assigned_ip == 0 )
                         sp->assigned_ip = ntohl(src_ip);
-                    /* Log first real packet - direct P2P or supernode relay */
-                    if ( sp && !sp->first_seen ) {
-                        sp->first_seen = 1;
-                        char vip[INET_ADDRSTRLEN] = "-";
-                        if (sp->assigned_ip) {
-                            struct in_addr a;
-                            a.s_addr = htonl(sp->assigned_ip);
-                            inet_ntop(AF_INET, &a, vip, sizeof(vip));
-                        }
-                        n2n_sock_str_t sockbuf;
-                        if (from_supernode)
-                            traceEvent(TRACE_NORMAL, "PsP relay with %s via supernode", vip);
-                        else
-                            traceEvent(TRACE_NORMAL, "P2P direct with %s at %s",
-                                       vip, sock_to_cstr(sockbuf, orig_sender));
-                    }
                     PEERS_UNLOCK(eee);
                 }
             }
@@ -2604,7 +2608,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     int peer_uses_ipv4 = (scan->sock.family == AF_INET);
                     int peer_uses_ipv6 = (scan->sock6.family == AF_INET6);
                     int register_is_ipv4 = (orig_sender->family == AF_INET);
-                    
+
                     /* Only process if REGISTER matches peer's active protocol */
                     if ((peer_uses_ipv4 && register_is_ipv4) || (peer_uses_ipv6 && !register_is_ipv4)) {
                         n2n_sock_t *expected_sock = peer_uses_ipv4 ? &scan->sock : &scan->sock6;
@@ -2772,7 +2776,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
             if (!known) {
                 /* New peer: try both IPv6 and IPv4 if available for maximum connectivity */
                 int tried_ipv6 = 0;
-                
+
                 /* Try IPv6 if peer has IPv6 and we have IPv6 socket */
                 if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
                     pi.sock6.family == AF_INET6 &&
@@ -2783,7 +2787,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     try_send_register(eee, 1, pi.mac, &pi.sock6);
                     tried_ipv6 = 1;
                 }
-                
+
                 /* Also try IPv4 if available (parallel punch for dual-stack) */
                 if (pi.sockets[0].family == AF_INET)
                 {
@@ -2818,7 +2822,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     /* Fallback: try sockets[0] if we haven't tried IPv6 */
                     try_send_register(eee, 1, pi.mac, &pi.sockets[0]);
                 }
-                
+
                 /* Store sock6 and version/os_name into pending_peer */
                 {
                     struct peer_info *pp = find_peer_by_mac(eee->pending_peers, pi.mac);
@@ -2835,17 +2839,17 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                 /* Known peer: check if address changed (only check active protocol) */
                 int known_uses_ipv4 = (known->sock.family == AF_INET);
                 int known_uses_ipv6 = (known->sock6.family == AF_INET6);
-                
+
                 int addr_changed = 0;
-                
+
                 /* Check if the active protocol's address changed */
                 if (known_uses_ipv4 && pi.sockets[0].family == AF_INET) {
                     addr_changed = (0 != sock_equal(&known->sock, &pi.sockets[0]));
-                } else if (known_uses_ipv6 && (pi.aflags & N2N_AFLAGS_IPV6_SOCKET) && 
+                } else if (known_uses_ipv6 && (pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
                            pi.sock6.family == AF_INET6) {
                     addr_changed = (0 != sock_equal(&known->sock6, &pi.sock6));
                 }
-                
+
                 if (addr_changed) {
                     /* Check if known->sock is the LAN address matching pi.sockets[1] */
                     int lan_match = (pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
@@ -2876,7 +2880,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                             try_send_register(eee, 1, pi.mac, &pi.sock6);
                             repunched = 1;
                         }
-                        
+
                         if (pi.sockets[0].family == AF_INET)
                         {
                             if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
@@ -3237,7 +3241,7 @@ static int query_txt_record(const char *domain, char *txt_result, size_t result_
         memset(&dns_addr, 0, sizeof(dns_addr));
         dns_addr.sin_family = AF_INET;
         dns_addr.sin_port = htons(53);
-        
+
 #ifdef _WIN32
         dns_addr.sin_addr.s_addr = inet_addr(dns_servers[i]);
 #else
@@ -3291,14 +3295,14 @@ static int query_txt_record(const char *domain, char *txt_result, size_t result_
 static int query_dns_record(const char *domain, char *ip_result, size_t result_size, int query_ipv6) {
     if (!domain || !ip_result || result_size < (query_ipv6 ? 40 : 16))
         return -1;
-    
+
     const char *dns_servers[] = {"8.8.8.8", "119.29.29.29", "1.1.1.1", "223.5.5.5"};
     uint8_t query_buf[256];
     uint8_t response_buf[1024];
     uint16_t txn_id = (uint16_t)(time(NULL) & 0xFFFF) + query_ipv6;
     uint16_t qtype = query_ipv6 ? 0x1C : 0x01;  /* AAAA=28, A=1 */
     uint16_t expected_rdlen = query_ipv6 ? 16 : 4;
-    
+
     /* Build DNS query */
     query_buf[0] = (txn_id >> 8) & 0xFF;
     query_buf[1] = txn_id & 0xFF;
@@ -3307,7 +3311,7 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
     query_buf[6] = 0x00; query_buf[7] = 0x00;
     query_buf[8] = 0x00; query_buf[9] = 0x00;
     query_buf[10] = 0x00; query_buf[11] = 0x00;
-    
+
     size_t pos = 12;
     const char *p = domain;
     while (*p && pos < sizeof(query_buf) - 20) {
@@ -3324,7 +3328,7 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
     query_buf[pos++] = (qtype >> 8) & 0xFF; query_buf[pos++] = qtype & 0xFF;
     query_buf[pos++] = 0x00; query_buf[pos++] = 0x01;
     int query_len = (int)pos;
-    
+
     /* Try each DNS server */
     for (int i = 0; i < 4; i++) {
         struct sockaddr_in dns_addr;
@@ -3336,10 +3340,10 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
 #else
         inet_pton(AF_INET, dns_servers[i], &dns_addr.sin_addr);
 #endif
-        
+
         SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
         if (sock < 0) continue;
-        
+
 #ifdef _WIN32
         DWORD timeout = 5000;
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
@@ -3347,26 +3351,26 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
         struct timeval tv = {5, 0};
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
-        
+
         if (sendto(sock, (char*)query_buf, query_len, 0,
                    (struct sockaddr*)&dns_addr, sizeof(dns_addr)) < 0) {
             closesocket(sock);
             continue;
         }
-        
+
         socklen_t addr_len = sizeof(dns_addr);
         int resp_len = recvfrom(sock, (char*)response_buf, sizeof(response_buf), 0,
                                  (struct sockaddr*)&dns_addr, &addr_len);
         closesocket(sock);
-        
-        if (resp_len > 12 && 
-            response_buf[0] == ((txn_id >> 8) & 0xFF) && 
+
+        if (resp_len > 12 &&
+            response_buf[0] == ((txn_id >> 8) & 0xFF) &&
             response_buf[1] == (txn_id & 0xFF) &&
             (response_buf[2] & 0x80) && !(response_buf[3] & 0x0F)) {
-            
+
             uint16_t ancount = (response_buf[6] << 8) | response_buf[7];
             if (ancount == 0) continue;
-            
+
             /* Skip question */
             pos = 12;
             while (pos < (size_t)resp_len && response_buf[pos] != 0) {
@@ -3375,7 +3379,7 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
             }
             if (response_buf[pos] == 0) pos++;
             pos += 4;
-            
+
             /* Parse answers */
             for (int j = 0; j < ancount && pos < (size_t)resp_len; j++) {
                 if ((response_buf[pos] & 0xC0) == 0xC0) {
@@ -3385,15 +3389,15 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
                         pos += response_buf[pos] + 1;
                     pos++;
                 }
-                
+
                 if (pos + 10 > (size_t)resp_len) break;
                 uint16_t rtype = (response_buf[pos] << 8) | response_buf[pos+1];
                 uint16_t rdlength = (response_buf[pos+8] << 8) | response_buf[pos+9];
                 pos += 10;
-                
+
                 if (rtype == qtype && rdlength == expected_rdlen && pos + rdlength <= (size_t)resp_len) {
                     if (query_ipv6) {
-                        snprintf(ip_result, result_size, 
+                        snprintf(ip_result, result_size,
                                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
                                 response_buf[pos], response_buf[pos+1], response_buf[pos+2], response_buf[pos+3],
                                 response_buf[pos+4], response_buf[pos+5], response_buf[pos+6], response_buf[pos+7],
@@ -3480,7 +3484,7 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
             if( 0 == err ) {
                 if (ainfo) {
                     struct addrinfo *selected = ainfo;
-                    
+
                     /* Prefer user-specified address family, otherwise prefer IPv4 for compatibility */
                     int prefer_af = (af != AF_UNSPEC) ? af : AF_INET;
                     for (struct addrinfo *scan = ainfo; scan; scan = scan->ai_next) {
@@ -3489,7 +3493,7 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
                             break;
                         }
                     }
-                    
+
                     if (PF_INET == selected->ai_family) {
                         struct sockaddr_in* saddr = (struct sockaddr_in*) selected->ai_addr;
                         memcpy( sn->addr.v4, &(saddr->sin_addr), IPV4_SIZE );
@@ -3509,12 +3513,12 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
                 /* getaddrinfo failed, try public DNS: IPv4 first, then IPv6 if needed */
                 char ip_str[64];
                 int try_ipv6 = (af != AF_INET);
-                
+
                 if (query_dns_record(addr, ip_str, sizeof(ip_str), 0) == 0 &&
                     inet_pton(AF_INET, ip_str, &sn->addr.v4) == 1) {
                     sn->family = AF_INET;
                     err = 0;
-                } else if (try_ipv6 && 
+                } else if (try_ipv6 &&
                            query_dns_record(addr, ip_str, sizeof(ip_str), 1) == 0 &&
                            inet_pton(AF_INET6, ip_str, &sn->addr.v6) == 1) {
                     sn->family = AF_INET6;
@@ -3544,42 +3548,42 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
 /* ***************************************************** */
 
 /** Check if supernode domain resolved to a new address and re-register if changed.
- *  
+ *
  *  Main-thread implementation: periodically re-resolves supernode domain when idle.
  *  Checks every 300 seconds (5 minutes) and only when no communication in last 30 seconds.
  *  If supernode domain resolves to a different address, update and re-register.
- *  
+ *
  *  @return 1 if address changed and re-registered, 0 otherwise
  */
 static int check_supernode_domain_and_update(n2n_edge_t * eee, time_t now)
 {
     n2n_sock_t new_addr;
-    
+
     /* Skip if supernode is not a domain name (re_resolve_supernode_ip == 0) */
     if (!eee->re_resolve_supernode_ip) {
         return 0;
     }
-    
+
     /* Check every 300 seconds (5 minutes) */
     if (eee->last_resolve_check != 0 && (now - eee->last_resolve_check) < 300) {
         return 0;
     }
-    
+
     /* Only resolve if edge is idle (no P2P communication in last 30 seconds) */
     /* Note: We don't check last_sup because regular keepalive would prevent updates */
     if ((now - eee->last_p2p <= 30)) {
         return 0;
     }
-    
+
     eee->last_resolve_check = now;
-    
+
     /* Resolve supernode domain in main thread (may block briefly) */
     memset(&new_addr, 0, sizeof(n2n_sock_t));
     if (supernode2addr(&new_addr, eee->sn_af, eee->sn_ip_array[eee->sn_idx]) != 0) {
         traceEvent(TRACE_WARNING, "Failed to resolve supernode domain");
         return 0;
     }
-    
+
     /* Check if address changed */
     if (eee->last_resolved_supernode.family != 0 &&
         sock_equal(&eee->last_resolved_supernode, &new_addr) != 0)
@@ -3587,20 +3591,20 @@ static int check_supernode_domain_and_update(n2n_edge_t * eee, time_t now)
         n2n_sock_str_t new_str;
         sock_to_cstr(new_str, &new_addr);
         traceEvent(TRACE_NORMAL, "Supernode address updated to %s", new_str);
-        
+
         /* Update supernode address and re-register */
         eee->supernode = new_addr;
         eee->last_resolved_supernode = new_addr;
-        
+
         /* Clear alternate address - domain resolution already picked the best address */
         memset(&eee->supernode_alt, 0, sizeof(n2n_sock_t));
-        
+
         traceEvent(TRACE_NORMAL, "Re-registering with supernode at new address");
-        
+
         /* Reset supernode connection state */
         eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
         eee->sn_wait = 0;
-        
+
         send_register_super(eee, &(eee->supernode));
         eee->last_register_req = now;
         return 1;
@@ -3610,7 +3614,7 @@ static int check_supernode_domain_and_update(n2n_edge_t * eee, time_t now)
         /* First resolution - just store it */
         eee->last_resolved_supernode = new_addr;
     }
-    
+
     return 0;
 }
 
@@ -4355,7 +4359,7 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
     /* Try to open IPv6 socket on same port for dual-stack support */
     eee.udp_sock6 = open_socket6(local_port, 1 /*bind ANY*/);
-    
+
     /* Detect actual system connectivity by checking available address families */
     int has_ipv4 = (eee.udp_sock != -1);
     int has_ipv6 = 0;
@@ -4413,20 +4417,20 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
         if (eee.udp_sock6 == -1)
             traceEvent(TRACE_WARNING, "IPv6 UDP socket unavailable, IPv6 peers will use relay only");
-        
+
         /* Resolve alternate supernode address only for pure IP addresses (not domains) */
         if (eee.supernode_alt.family == 0) {
             char *sn_host = eee.sn_ip_array[eee.sn_idx];
             struct in_addr ipv4_test;
             struct in6_addr ipv6_test;
-            
+
             /* Check if it's a pure IP address */
-            if (inet_pton(AF_INET, sn_host, &ipv4_test) == 1 || 
+            if (inet_pton(AF_INET, sn_host, &ipv4_test) == 1 ||
                 inet_pton(AF_INET6, sn_host, &ipv6_test) == 1) {
-                
+
                 int alt_af = (eee.supernode.family == AF_INET6) ? AF_INET : AF_INET6;
                 int can_resolve = (alt_af == AF_INET6) ? has_ipv6 : has_ipv4;
-                
+
                 if (can_resolve && supernode2addr(&eee.supernode_alt, alt_af, sn_host) == 0) {
                     n2n_sock_str_t sockbuf_alt;
                     traceEvent(TRACE_INFO, "Supernode alt address resolved: %s",
@@ -4610,7 +4614,7 @@ static int run_loop(n2n_edge_t * eee )
 
         update_supernode_reg(eee, nowTime);
         check_punch_timeouts(eee, nowTime);
-        
+
         /* Periodically check if supernode domain resolved to a new address */
         check_supernode_domain_and_update(eee, nowTime);
 
