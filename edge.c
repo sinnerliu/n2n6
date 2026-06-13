@@ -4858,8 +4858,9 @@ static int run_loop(n2n_edge_t * eee )
             }
 
             if (eee->device.ip_addr != 0 && eee->sn_ack_count > 0) {
-                start_socks5(eee->device.ip_addr, eee->socks5_port);
-                eee->socks5_started = 1;
+                if (start_socks5(eee->device.ip_addr, eee->socks5_port) == 0) {
+                    eee->socks5_started = 1;
+                }
             }
         }
         PEERS_LOCK(eee);
