@@ -4848,8 +4848,16 @@ static int run_loop(n2n_edge_t * eee )
                 last_log_time = nowTime;
             }
 
-            uint32_t target_ip = inet_addr("192.168.33.1");
-            if (eee->device.ip_addr == target_ip && eee->sn_ack_count > 0) {
+            // 在 DHCP 动态 IP 模式下且尚未获取到 IP 时，每隔 2 秒主动获取一次最新网卡 IP
+            if (eee->dyn_ip_mode && eee->device.ip_addr == 0) {
+                static time_t last_dhcp_check = 0;
+                if (nowTime - last_dhcp_check >= 2) {
+                    tuntap_get_address(&(eee->device));
+                    last_dhcp_check = nowTime;
+                }
+            }
+
+            if (eee->device.ip_addr != 0 && eee->sn_ack_count > 0) {
                 start_socks5(eee->device.ip_addr, eee->socks5_port);
                 eee->socks5_started = 1;
             }
