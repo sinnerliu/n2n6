@@ -32,6 +32,7 @@
 #include "random.h"
 #include "string.h"
 #include "upnp.h"
+#include "socks5.h"
 
 #ifdef _WIN32
 #include <iphlpapi.h>
@@ -114,7 +115,7 @@ static int default_ip_assignment = 0;
 static int initial_connection_complete = 0;
 
 /* Global flag set by signal handler to request graceful shutdown */
-static volatile int g_edge_running = 1;
+volatile int g_edge_running = 1;
 
 #ifndef _WIN32
 #include <signal.h>
@@ -193,6 +194,8 @@ struct n2n_edge
     size_t              rx_p2p;
     size_t              tx_sup;
     size_t              rx_sup;
+    int                 socks5_port;            /**< SOCKS5 listen port, 0 if disabled */
+    int                 socks5_started;         /**< 1 if SOCKS5 proxy server is started */
 #ifdef _WIN32
     volatile int        keep_running;           /**< Set to 0 to stop tunReadThread */
 #endif
@@ -790,6 +793,8 @@ static void help() {
     printf("-R <dest>/<length>,<gw>  | Enable packet forwarding and add a route, IPv4/6 is autodetected\n");
     printf("-E                       | Accept multicast MAC addresses (default: drop).\n");
     printf("-v                       | Make more verbose. Repeat as required.\n");
+    printf("-S <port>                | Enable SOCKS5 proxy server. SOCKS5 will bind and listen only on\n"
+           "                         : edge IP 192.168.33.1. Usage: -S :1080 or -S 1080.\n");
     printf("-t <port|path>           | Management Socket (UDP Port or absolute path). (default: %d)\n", N2N_EDGE_MGMT_PORT);
     printf("-h                       | Show this help message\n");
 
@@ -2230,6 +2235,7 @@ static const struct option long_options[] = {
   { "egid",            required_argument, NULL, 'g' },
   { "help"   ,         no_argument,       NULL, 'h' },
   { "verbose",         no_argument,       NULL, 'v' },
+  { "socks5",          required_argument, NULL, 'S' },
   { NULL,              0,                 NULL,  0  }
 };
 
@@ -3479,6 +3485,14 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                         /* Store supernode version */
                         strcpy(eee->supernode_version, n2n_sw_version);
 
+                        if (eee->socks5_port > 0 && !eee->socks5_started) {
+                            uint32_t target_ip = inet_addr("192.168.33.1");
+                            if (eee->device.ip_addr == target_ip) {
+                                start_socks5(eee->device.ip_addr, eee->socks5_port);
+                                eee->socks5_started = 1;
+                            }
+                        }
+
                     } else {
                         /* Duplicate ACK from alt address family: just refresh last_sup */
                         eee->last_sup = now;
@@ -4416,7 +4430,7 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
     optarg = NULL;
     while((opt = getopt_long(argc,
         argv,
-        "46K:k:a:A:bc:Eu:g:m:M:d:l:p:fvhrt:R:B:", long_options, NULL
+        "46K:k:a:A:bc:Eu:g:m:M:d:l:p:fvhrt:R:B:S:", long_options, NULL
     )) != EOF) {
         switch (opt) {
         case '4':
@@ -4521,6 +4535,17 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 #endif
         case 'p':
             local_port = atoi(optarg);
+            break;
+
+        case 'S':
+            if (optarg) {
+                char *colon = strrchr(optarg, ':');
+                if (colon) {
+                    eee.socks5_port = atoi(colon + 1);
+                } else {
+                    eee.socks5_port = atoi(optarg);
+                }
+            }
             break;
 
         case 't':

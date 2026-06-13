@@ -99,6 +99,7 @@ add_library(n2n_core STATIC
         n2n_keyfile.c
         minilzo.c
         upnp.c
+        socks5.c
         tuntap_freebsd.c
         tuntap_netbsd.c
         tuntap_linux.c
@@ -189,3 +190,8 @@ install(FILES ${PROJECT_BINARY_DIR}/doc/supernode.1.gz
 install(FILES ${PROJECT_BINARY_DIR}/doc/n2n_v2.7.gz
         DESTINATION /usr/share/man7)
 endif(DEFINED UNIX)
+
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(edge Threads::Threads)
+endif()
