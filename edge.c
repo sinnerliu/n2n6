@@ -4839,6 +4839,15 @@ static int run_loop(n2n_edge_t * eee )
         update_supernode_reg(eee, nowTime);
 
         if (eee->socks5_port > 0 && !eee->socks5_started) {
+            static time_t last_log_time = 0;
+            if (nowTime - last_log_time >= 5) {
+                struct in_addr addr;
+                addr.s_addr = eee->device.ip_addr;
+                traceEvent(TRACE_NORMAL, "[SOCKS5 诊断] 端口=%d, 虚拟网卡IP=%s, sn_ack_count=%d",
+                           eee->socks5_port, inet_ntoa(addr), (int)eee->sn_ack_count);
+                last_log_time = nowTime;
+            }
+
             uint32_t target_ip = inet_addr("192.168.33.1");
             if (eee->device.ip_addr == target_ip && eee->sn_ack_count > 0) {
                 start_socks5(eee->device.ip_addr, eee->socks5_port);
