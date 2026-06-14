@@ -143,8 +143,19 @@ endif()
 
 # Dead code elimination
 if(NOT DEFINED WIN32)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections -maes")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+
+    # 动态检测编译器是否支持 -maes 标志（仅在 x86 架构编译器上支持，ARM 上自动忽略）
+    include(CheckCCompilerFlag)
+    set(SAFE_CMAKE_TRY_COMPILE_TARGET_TYPE ${CMAKE_TRY_COMPILE_TARGET_TYPE})
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    check_c_compiler_flag("-maes" COMPILER_SUPPORT_MAES)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE ${SAFE_CMAKE_TRY_COMPILE_TARGET_TYPE})
+
+    if(COMPILER_SUPPORT_MAES)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes")
+    endif()
 endif()
 
 if(NOT DEFINED WIN32)
