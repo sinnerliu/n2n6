@@ -4649,7 +4649,7 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
                 } else {
                     eee.socks5_port = atoi(optarg);
                 }
-                traceEvent(TRACE_NORMAL, "SOCKS5: 配置监听端口为 %d", eee.socks5_port);
+                traceEvent(TRACE_NORMAL, "SOCKS5: Configured listening port to %d", eee.socks5_port);
             }
             break;
 
@@ -4955,7 +4955,7 @@ static int run_loop(n2n_edge_t * eee )
             if (nowTime - last_log_time >= 5) {
                 struct in_addr addr;
                 addr.s_addr = eee->device.ip_addr;
-                traceEvent(TRACE_NORMAL, "[SOCKS5 诊断] 端口=%d, 虚拟网卡IP=%s, sn_ack_count=%d",
+                traceEvent(TRACE_NORMAL, "[SOCKS5 Diagnostics] port=%d, virtual_ip=%s, sn_ack_count=%d",
                            eee->socks5_port, inet_ntoa(addr), (int)eee->sn_ack_count);
                 last_log_time = nowTime;
             }
