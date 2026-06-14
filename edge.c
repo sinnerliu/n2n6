@@ -4970,8 +4970,12 @@ static int run_loop(n2n_edge_t * eee )
             }
 
             if (eee->device.ip_addr != 0 && eee->sn_ack_count > 0) {
-                if (start_socks5(eee->device.ip_addr, eee->socks5_port) == 0) {
-                    eee->socks5_started = 1;
+                static time_t last_start_attempt = 0;
+                if (nowTime - last_start_attempt >= 3) {
+                    last_start_attempt = nowTime;
+                    if (start_socks5(eee->device.ip_addr, eee->socks5_port) == 0) {
+                        eee->socks5_started = 1;
+                    }
                 }
             }
         }

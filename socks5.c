@@ -71,7 +71,25 @@ int start_socks5(uint32_t ip_addr, int port) {
     if (bind(listen_fd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) == SOCKET_ERROR) {
         struct in_addr in_ip;
         in_ip.s_addr = ip_addr;
-        traceEvent(TRACE_ERROR, "SOCKS5: Failed to bind to %s:%d (port might be in use)", inet_ntoa(in_ip), port);
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        int is_addr_not_avail = (err == WSAEADDRNOTAVAIL);
+        int is_port_in_use = (err == WSAEADDRINUSE);
+#else
+        int err = errno;
+        int is_addr_not_avail = (err == EADDRNOTAVAIL);
+        int is_port_in_use = (err == EADDRINUSE);
+#endif
+        if (is_addr_not_avail) {
+            // 网卡 IP 分配初期（特别是 Windows DAD 冲突检测期间），绑定会返回此错误。
+            // 降低为 TRACE_DEBUG 级别以保持控制台清爽，静默重试。
+            traceEvent(TRACE_DEBUG, "SOCKS5: Failed to bind to %s:%d (interface IP not ready yet, retrying...)", inet_ntoa(in_ip), port);
+        } else if (is_port_in_use) {
+            // 端口确实被占用或未释放，提示警告，每 3 秒重试一次，不刷屏
+            traceEvent(TRACE_WARNING, "SOCKS5: Failed to bind to %s:%d (port might be in use, retrying...)", inet_ntoa(in_ip), port);
+        } else {
+            traceEvent(TRACE_ERROR, "SOCKS5: Failed to bind to %s:%d (error=%d)", inet_ntoa(in_ip), port, err);
+        }
         closesocket(listen_fd);
         return -1;
     }
