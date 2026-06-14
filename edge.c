@@ -2031,7 +2031,7 @@ void set_peer_operational( n2n_edge_t * eee,
             memcpy(arp+28, &eee->device.ip_addr, 4);       /* sender IP: ours */
             memcpy(arp+32, scan->mac_addr, 6);             /* target MAC: peer */
             memcpy(arp+38, &eee->device.ip_addr, 4);       /* target IP: ours (gratuitous) */
-            tuntap_write(&eee->device, arp, sizeof(arp));
+            send_packet2net(eee, arp, sizeof(arp));
         }
 
         traceEvent( TRACE_INFO, "Pending peers list size=%u",
@@ -2551,6 +2551,28 @@ static int is_ethMulticast( const void * buf, size_t bufsize )
         }
     }
     return retval;
+}
+
+static void send_gratuitous_arp(n2n_edge_t *eee) {
+    if (eee->device.ip_addr == 0) return;
+
+    struct n2n_arp_hdr arp_req;
+    memset(&arp_req, 0, sizeof(arp_req));
+    memset(arp_req.dst_mac, 0xFF, 6);
+    memcpy(arp_req.src_mac, eee->device.mac_addr, 6);
+    arp_req.eth_type = htons(0x0806);
+    arp_req.hw_type = htons(1);
+    arp_req.proto_type = htons(0x0800);
+    arp_req.hw_size = 6;
+    arp_req.proto_size = 4;
+    arp_req.opcode = htons(1); /* ARP Request (gratuitous) */
+    memcpy(arp_req.sender_mac, eee->device.mac_addr, 6);
+    arp_req.sender_ip = eee->device.ip_addr;
+    memset(arp_req.target_mac, 0, 6);
+    arp_req.target_ip = eee->device.ip_addr;
+
+    traceEvent(TRACE_INFO, "Sending broadcast gratuitous ARP to register virtual IP across network");
+    send_packet2net(eee, (unsigned char*)&arp_req, sizeof(arp_req));
 }
 
 /** Read a single packet from the TAP interface, process it and write out the
@@ -4874,6 +4896,7 @@ static int run_loop(n2n_edge_t * eee )
     time_t lastIfaceCheck=0;
     time_t lastTransop=0;
     time_t lastUpnpRenew=0;
+    time_t last_garp=0;
     int   retval = 0;
 
 #ifdef _WIN32
@@ -5006,6 +5029,12 @@ static int run_loop(n2n_edge_t * eee )
         if (eee->device.ip_addr != 0 && eee->sn_ack_count > 0 && !eee->subnet_scanned) {
             scan_subnet_arp(eee);
             eee->subnet_scanned = 1;
+        }
+        if (eee->device.ip_addr != 0 && eee->sn_ack_count > 0) {
+            if (nowTime - last_garp >= 60) {
+                send_gratuitous_arp(eee);
+                last_garp = nowTime;
+            }
         }
         PEERS_LOCK(eee);
         check_punch_timeouts(eee, nowTime);
