@@ -207,6 +207,7 @@ time_t n2n_now(void) {
         if (first_clk == 0) first_clk = clk;
         return 1000 + (time_t)((clk - first_clk) / CLOCKS_PER_SEC);
     }
+#endif
 }
 
 uint64_t n2n_now_ms(void) {
