@@ -1598,7 +1598,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                 scan->lan_punch_done = 0;
                 scan->lan_punch_start = 0;
                 scan->register_retry_count = 0;
-                scan->psp_logged = 0;
+                // scan->psp_logged = 0; /* 打洞重试时不清除 PsP 日志标志，防止重复打印 */
                 traceEvent(TRACE_INFO, "Retrying P2P punch for %s (attempt %u/3)",
                            PEER_ID(mac_tmp, scan),
                            scan->punch_retry_count);
@@ -1802,6 +1802,8 @@ struct peer_info * try_send_register( n2n_edge_t * eee,
         /* Already pending: update address based on family - preserve other family */
         n2n_sock_t *target_sock = (peer->family == AF_INET6) ? &scan->sock6 : &scan->sock;
         
+        scan->last_seen = n2n_now(); /* 通过中转流量维持 pending peer 活跃，防止被垃圾回收 */
+
         if ( sock_equal(target_sock, peer) != 0 ) {
             *target_sock = *peer;
             scan->num_sockets = 1;
@@ -1814,11 +1816,13 @@ struct peer_info * try_send_register( n2n_edge_t * eee,
             scan->lan_punch_start = 0;
             scan->lan_punch_done = 0;
             scan->psp_logged = 0;
+            scan->p2p_logged = 0;
             send_register(eee, peer);
             send_register(eee, &(eee->supernode));
             start_punch(eee, scan);
         } else if ( scan->punch_start_time == 0 && !scan->punch_failed ) {
             scan->psp_logged = 0;
+            scan->p2p_logged = 0;
             start_punch(eee, scan);
         }
     }
@@ -1893,6 +1897,8 @@ struct peer_info * try_send_register_lan( n2n_edge_t * eee,
         scan->punch_failed = 0;
         scan->register_retry_count = 0;
         scan->psp_logged = 0;
+        scan->p2p_logged = 0;
+        scan->last_seen = n2n_now(); /* 通过中转流量维持 pending peer 活跃，防止被垃圾回收 */
         
         /* Save temp_local_sock for LAN punch retransmissions */
         if (found) {
@@ -1982,7 +1988,7 @@ void set_peer_operational( n2n_edge_t * eee,
         if (!scan->p2p_logged) {
             char mac_buf[18];
             n2n_sock_str_t sockbuf;
-            traceEvent( TRACE_DEBUG, "P2P direct with %s at %s",
+            traceEvent( TRACE_NORMAL, "P2P direct with %s at %s",
                         PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ) );
             scan->p2p_logged = 1;
         }
