@@ -839,12 +839,9 @@ static void scan_subnet_arp(n2n_edge_t *eee) {
         return;
     }
 
-    struct in_addr start_addr, end_addr;
-    start_addr.s_addr = htonl(subnet_start);
-    end_addr.s_addr = htonl(subnet_end);
-
-    traceEvent(TRACE_NORMAL, "P2P scan: starting active scanning and probing virtual subnet IPs (%s to %s)...",
-               inet_ntoa(start_addr), inet_ntoa(end_addr));
+    traceEvent(TRACE_NORMAL, "P2P scan: starting active scanning and probing virtual subnet IPs (%u.%u.%u.%u to %u.%u.%u.%u)...",
+               (subnet_start >> 24) & 0xFF, (subnet_start >> 16) & 0xFF, (subnet_start >> 8) & 0xFF, subnet_start & 0xFF,
+               (subnet_end >> 24) & 0xFF, (subnet_end >> 16) & 0xFF, (subnet_end >> 8) & 0xFF, subnet_end & 0xFF);
 
     struct n2n_arp_hdr arp_req;
     memset(&arp_req, 0, sizeof(arp_req));
@@ -2728,8 +2725,15 @@ static int handle_PACKET( n2n_edge_t * eee,
                     PEERS_LOCK(eee);
                     sp = find_peer_by_mac(eee->known_peers, pkt->srcMac);
                     if ( !sp ) sp = find_peer_by_mac(eee->pending_peers, pkt->srcMac);
-                    if ( sp && sp->assigned_ip == 0 )
+                    if ( sp && sp->assigned_ip == 0 ) {
                         sp->assigned_ip = ntohl(src_ip);
+                        char mac_buf[18];
+                        n2n_sock_str_t sockbuf;
+                        struct in_addr vip;
+                        vip.s_addr = htonl(sp->assigned_ip);
+                        traceEvent(TRACE_NORMAL, "[P2P Punch] Sniffed peer virtual IP: MAC=%s, Virtual IP=%s, WAN=%s",
+                                   macaddr_str(mac_buf, sp->mac_addr), inet_ntoa(vip), sock_to_cstr(sockbuf, &sp->sock));
+                    }
                     PEERS_UNLOCK(eee);
                 }
             }
