@@ -1493,11 +1493,14 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
             scan->punch_failed = 1;
             scan->punch_reset_time = now;
             if (!scan->psp_logged) {
+                scan->psp_logged = 1;
+            }
+            if (scan->last_connection_type != 1) {
                 n2n_sock_str_t sockbuf;
                 n2n_sock_t *active_sock = (scan->sock.family == AF_INET) ? &scan->sock : &scan->sock6;
                 traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s at %s",
                            PEER_ID(mac_tmp, scan), sock_to_cstr(sockbuf, active_sock));
-                scan->psp_logged = 1;
+                scan->last_connection_type = 1;
             }
         } else if ( scan->punch_start_time != 0 &&
                     !scan->punch_failed &&
@@ -1557,9 +1560,12 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                 scan->punch_reset_time = now;
                 scan->register_retry_count = 0;
                 if (!scan->psp_logged) {
+                    scan->psp_logged = 1;
+                }
+                if (scan->last_connection_type != 1) {
                     traceEvent(TRACE_NORMAL, "REGISTER retries exhausted for %s, PsP",
                                PEER_ID(mac_tmp, scan));
-                    scan->psp_logged = 1;
+                    scan->last_connection_type = 1;
                 }
             }
         } else if ( scan->punch_start_time == 0 && !scan->punch_failed &&
@@ -1586,9 +1592,12 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
             {
                 scan->punch_retry_count++;
                 if ( scan->punch_retry_count >= 3 ) {
-                    traceEvent(TRACE_NORMAL, "Giving up on %s after %u punch retries, relay only",
-                               PEER_ID(mac_tmp, scan),
-                               scan->punch_retry_count);
+                    if (scan->last_connection_type != 1) {
+                        traceEvent(TRACE_NORMAL, "Giving up on %s after %u punch retries, relay only",
+                                   PEER_ID(mac_tmp, scan),
+                                   scan->punch_retry_count);
+                        scan->last_connection_type = 1;
+                    }
                     prev = scan;
                     scan = scan->next;
                     continue;
@@ -1712,6 +1721,7 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
                     scan->direct_seen         = 0;
                     scan->p2p_logged       = 0;
                     scan->psp_logged       = 0;
+                    scan->last_connection_type = 0;
                     send_query_peer(eee, scan->mac_addr);
                     start_punch(eee, scan);
                     scan = next;
@@ -1990,11 +2000,16 @@ void set_peer_operational( n2n_edge_t * eee,
         scan->psp_logged = 0;
 
         if (!scan->p2p_logged) {
+            scan->p2p_logged = 1;
+        }
+
+        if (scan->last_connection_type != 2 || sock_equal(&scan->last_conn_sock, peer) != 0) {
             char mac_buf[18];
             n2n_sock_str_t sockbuf;
             traceEvent( TRACE_NORMAL, "P2P direct with %s at %s",
                         PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ) );
-            scan->p2p_logged = 1;
+            scan->last_connection_type = 2;
+            scan->last_conn_sock = *peer;
         }
 
         /* Send REGISTER back to confirm our new address to the peer */

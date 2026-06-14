@@ -249,6 +249,8 @@ struct peer_info {
     uint8_t             psp_logged;        /* 1 if PsP message already printed for current state */
     uint8_t             p2p_logged;        /* 1 if P2P direct message already printed for current state */
     uint8_t             same_lan_as_sn;    /* 1 if edge is in same LAN as supernode */
+    uint8_t             last_connection_type; /* 上一次的连接类型：0=未知/断开, 1=PsP中转, 2=P2P直连 */
+    n2n_sock_t          last_conn_sock;       /* 上一次记录的直连套接字地址 */
 };
 
 struct n2n_edge; /* defined in edge.c */
