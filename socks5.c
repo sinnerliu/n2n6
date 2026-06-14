@@ -10,15 +10,34 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
+#include <fcntl.h>
 #define SOCKET int
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 #endif
 
 extern volatile int g_edge_running;
+
+/* 设置套接字阻塞/非阻塞模式 */
+static void set_socket_nonblocking(SOCKET fd, int nonblocking) {
+#ifdef _WIN32
+    unsigned long mode = nonblocking ? 1 : 0;
+    ioctlsocket(fd, FIONBIO, &mode);
+#else
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags != -1) {
+        if (nonblocking) {
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        } else {
+            fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+        }
+    }
+#endif
+}
 
 // 传递给客户端处理线程的参数结构体
 typedef struct {
@@ -294,12 +313,82 @@ static void* socks5_client_thread(void* lpArg)
         goto cleanup;
     }
 
+    /* 将套接字设为非阻塞以进行超时 connect */
+    set_socket_nonblocking(remote_fd, 1);
+
     int conn_len = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
-    if (connect(remote_fd, (struct sockaddr*)&dest_addr, conn_len) == SOCKET_ERROR) {
+    int conn_ret = connect(remote_fd, (struct sockaddr*)&dest_addr, conn_len);
+    int is_connecting = 0;
+
+    if (conn_ret == SOCKET_ERROR) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        if (err == WSAEWOULDBLOCK) {
+            is_connecting = 1;
+        }
+#else
+        if (errno == EINPROGRESS) {
+            is_connecting = 1;
+        }
+#endif
+    }
+
+    if (is_connecting) {
+        fd_set write_fds, err_fds;
+        struct timeval tv;
+        FD_ZERO(&write_fds);
+        FD_ZERO(&err_fds);
+        FD_SET(remote_fd, &write_fds);
+        FD_SET(remote_fd, &err_fds);
+
+        tv.tv_sec = 5;  /* 5 秒连接超时 */
+        tv.tv_usec = 0;
+
+        int select_ret = select((int)(remote_fd + 1), NULL, &write_fds, &err_fds, &tv);
+        if (select_ret <= 0) {
+            /* 超时或 select 错误 */
+            unsigned char fail_conn[10] = {0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            send(client_fd, (char*)fail_conn, 10, 0);
+            goto cleanup;
+        }
+
+        /* 检查是否有错误发生 */
+        if (FD_ISSET(remote_fd, &err_fds)) {
+            unsigned char fail_conn[10] = {0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            send(client_fd, (char*)fail_conn, 10, 0);
+            goto cleanup;
+        }
+
+        if (FD_ISSET(remote_fd, &write_fds)) {
+            int valopt = 0;
+            socklen_t lon = sizeof(valopt);
+            if (getsockopt(remote_fd, SOL_SOCKET, SO_ERROR, (char*)(&valopt), &lon) < 0 || valopt != 0) {
+                unsigned char fail_conn[10] = {0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+                send(client_fd, (char*)fail_conn, 10, 0);
+                goto cleanup;
+            }
+        }
+    } else if (conn_ret == SOCKET_ERROR) {
+        /* 其他连接错误，直接失败 */
         unsigned char fail_conn[10] = {0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
         send(client_fd, (char*)fail_conn, 10, 0);
         goto cleanup;
     }
+
+    /* 连接成功后还原为阻塞模式，保证后续双向 select 转发的逻辑结构匹配 */
+    set_socket_nonblocking(remote_fd, 0);
+
+    /* 极致网络优化：禁用 Nagle 算法（启用 TCP_NODELAY），优化双向 TCP 缓冲区为 256KB */
+    int flag_nodelay = 1;
+    int buf_size = 262144; /* 256KB */
+    
+    setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag_nodelay, sizeof(flag_nodelay));
+    setsockopt(remote_fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&flag_nodelay, sizeof(flag_nodelay));
+    
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, (const char*)&buf_size, sizeof(buf_size));
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVBUF, (const char*)&buf_size, sizeof(buf_size));
+    setsockopt(remote_fd, SOL_SOCKET, SO_SNDBUF, (const char*)&buf_size, sizeof(buf_size));
+    setsockopt(remote_fd, SOL_SOCKET, SO_RCVBUF, (const char*)&buf_size, sizeof(buf_size));
 
     // 响应客户端: REP = 0x00 (成功)
     unsigned char succ_resp[10] = {0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -307,7 +396,7 @@ static void* socks5_client_thread(void* lpArg)
 
     // 4. 双向 TCP 数据中转
     fd_set fds;
-    char forward_buf[8192];
+    char forward_buf[65536]; /* 扩容单次转发缓冲区至 64KB */
     int running = 1;
 
     while (running && g_edge_running) {

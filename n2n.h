@@ -239,6 +239,7 @@ struct peer_info {
     uint8_t             keepalive_fails;   /* consecutive keepalive failures */
     time_t              last_query_sent;   /* time last query_peer was sent, for rate-limiting */
     time_t              last_punch_probe;  /* time last PROBE was sent during hole-punch */
+    uint64_t            last_punch_probe_ms; /* time last PROBE was sent (in milliseconds) */
     uint8_t             punch_retry_count; /* number of punch retries, remove after max */
     uint8_t             register_retry_count; /* REGISTER retries after PROBE_ACK, max 3 */
     time_t              last_register_sent;   /* time last REGISTER was sent after PROBE_ACK */
@@ -290,6 +291,7 @@ extern const uint8_t multicast_addr[6];
 /* Functions */
 extern void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...);
 extern time_t n2n_now(void);
+extern uint64_t n2n_now_ms(void);
 extern int  tuntap_open(tuntap_dev *device, struct tuntap_config* config);
 extern ssize_t tuntap_read(struct tuntap_dev *tuntap, unsigned char *buf, size_t len);
 extern ssize_t tuntap_write(struct tuntap_dev *tuntap, unsigned char *buf, size_t len);

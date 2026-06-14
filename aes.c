@@ -6,6 +6,183 @@
 #include <string.h>
 #include <stdlib.h>
 
+#if (defined(__x86_64__) || defined(__i386__) || defined(_M_IX86) || defined(_M_X64))
+#define HAS_X86_AESNI 1
+#endif
+
+#if HAS_X86_AESNI
+#include <wmmintrin.h>
+#include <tmmintrin.h>
+#include <smmintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+#endif
+
+#if HAS_X86_AESNI
+static int detect_aes_ni(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    unsigned int eax, ebx, ecx, edx;
+    if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
+        return (ecx & (1 << 25)) != 0; /* ECX 的第 25 位指示是否支持 AES-NI */
+    }
+#elif defined(_MSC_VER)
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 1);
+    return (cpuInfo[2] & (1 << 25)) != 0;
+#endif
+    return 0;
+}
+
+#define AES_128_KEY_EXPAND(rk, temp1, temp2, rcon) \
+    temp2 = _mm_aeskeygenassist_si128(temp1, rcon); \
+    temp2 = _mm_shuffle_epi32(temp2, 0xff); \
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4)); \
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4)); \
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4)); \
+    temp1 = _mm_xor_si128(temp1, temp2); \
+    rk = temp1;
+
+static void aes_ni_key_setup_128(const uint8_t *key, __m128i *rk) {
+    __m128i temp1, temp2;
+    temp1 = _mm_loadu_si128((const __m128i*)key);
+    rk[0] = temp1;
+
+    AES_128_KEY_EXPAND(rk[1], temp1, temp2, 0x01);
+    AES_128_KEY_EXPAND(rk[2], temp1, temp2, 0x02);
+    AES_128_KEY_EXPAND(rk[3], temp1, temp2, 0x04);
+    AES_128_KEY_EXPAND(rk[4], temp1, temp2, 0x08);
+    AES_128_KEY_EXPAND(rk[5], temp1, temp2, 0x10);
+    AES_128_KEY_EXPAND(rk[6], temp1, temp2, 0x20);
+    AES_128_KEY_EXPAND(rk[7], temp1, temp2, 0x40);
+    AES_128_KEY_EXPAND(rk[8], temp1, temp2, 0x80);
+    AES_128_KEY_EXPAND(rk[9], temp1, temp2, 0x1B);
+    AES_128_KEY_EXPAND(rk[10], temp1, temp2, 0x36);
+}
+
+static void aes_ni_key_setup_256(const uint8_t *key, __m128i *rk) {
+    __m128i temp1, temp2, temp3;
+
+    temp1 = _mm_loadu_si128((const __m128i*)key);
+    temp3 = _mm_loadu_si128((const __m128i*)(key + 16));
+    rk[0] = temp1;
+    rk[1] = temp3;
+
+    /* Round 2 & 3 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x01);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[2] = temp1;
+
+    temp2 = _mm_aeskeygenassist_si128(temp1, 0x00);
+    temp2 = _mm_shuffle_epi32(temp2, 0xaa);
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, temp2);
+    rk[3] = temp3;
+
+    /* Round 4 & 5 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x02);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[4] = temp1;
+
+    temp2 = _mm_aeskeygenassist_si128(temp1, 0x00);
+    temp2 = _mm_shuffle_epi32(temp2, 0xaa);
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, temp2);
+    rk[5] = temp3;
+
+    /* Round 6 & 7 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x04);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[6] = temp1;
+
+    temp2 = _mm_aeskeygenassist_si128(temp1, 0x00);
+    temp2 = _mm_shuffle_epi32(temp2, 0xaa);
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, temp2);
+    rk[7] = temp3;
+
+    /* Round 8 & 9 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x08);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[8] = temp1;
+
+    temp2 = _mm_aeskeygenassist_si128(temp1, 0x00);
+    temp2 = _mm_shuffle_epi32(temp2, 0xaa);
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, temp2);
+    rk[9] = temp3;
+
+    /* Round 10 & 11 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x10);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[10] = temp1;
+
+    temp2 = _mm_aeskeygenassist_si128(temp1, 0x00);
+    temp2 = _mm_shuffle_epi32(temp2, 0xaa);
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, temp2);
+    rk[11] = temp3;
+
+    /* Round 12 & 13 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x20);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[12] = temp1;
+
+    temp2 = _mm_aeskeygenassist_si128(temp1, 0x00);
+    temp2 = _mm_shuffle_epi32(temp2, 0xaa);
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, _mm_slli_si128(temp3, 4));
+    temp3 = _mm_xor_si128(temp3, temp2);
+    rk[13] = temp3;
+
+    /* Round 14 */
+    temp2 = _mm_aeskeygenassist_si128(temp3, 0x40);
+    temp2 = _mm_shuffle_epi32(temp2, 0xff);
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, _mm_slli_si128(temp1, 4));
+    temp1 = _mm_xor_si128(temp1, temp2);
+    rk[14] = temp1;
+}
+#endif
+
 /* Aliases for compatibility */
 #define AES_BLOCK_SIZE    N2N_AES_BLOCK_SIZE
 #define AES128_KEY_BYTES  N2N_AES128_KEY_BYTES
@@ -637,14 +814,33 @@ int n2n_aes_ecb_encrypt (unsigned char *out, const unsigned char *in, n2n_aes_co
 
 int n2n_aes_cbc_encrypt (unsigned char *out, const unsigned char *in, size_t in_len,
                      const unsigned char *iv, n2n_aes_context_t *ctx) {
+    size_t n = in_len / AES_BLOCK_SIZE;
+
+#if HAS_X86_AESNI
+    if (ctx->use_ni) {
+        __m128i feedback = _mm_loadu_si128((const __m128i*)iv);
+        for (size_t i = 0; i < n; i++) {
+            __m128i pt = _mm_loadu_si128((const __m128i*)&in[i * AES_BLOCK_SIZE]);
+            __m128i state = _mm_xor_si128(pt, feedback);
+            
+            state = _mm_xor_si128(state, ((const __m128i*)ctx->enc_key_ni)[0]);
+            for (int r = 1; r < ctx->Nr; r++) {
+                state = _mm_aesenc_si128(state, ((const __m128i*)ctx->enc_key_ni)[r]);
+            }
+            state = _mm_aesenclast_si128(state, ((const __m128i*)ctx->enc_key_ni)[ctx->Nr]);
+            
+            feedback = state;
+            _mm_storeu_si128((__m128i*)&out[i * AES_BLOCK_SIZE], state);
+        }
+        return n * AES_BLOCK_SIZE;
+    }
+#endif
 
     uint8_t tmp[AES_BLOCK_SIZE];
     size_t i;
-    size_t n;
 
     memcpy(tmp, iv, AES_BLOCK_SIZE);
 
-    n = in_len / AES_BLOCK_SIZE;
     for(i=0; i < n; i++) {
         fix_xor(tmp, &in[i * AES_BLOCK_SIZE]);
         aes_internal_encrypt(ctx->enc_rk, ctx->Nr, tmp, tmp);
@@ -657,15 +853,35 @@ int n2n_aes_cbc_encrypt (unsigned char *out, const unsigned char *in, size_t in_
 
 int n2n_aes_cbc_decrypt (unsigned char *out, const unsigned char *in, size_t in_len,
                      const unsigned char *iv, n2n_aes_context_t *ctx) {
+    size_t n = in_len / AES_BLOCK_SIZE;
+
+#if HAS_X86_AESNI
+    if (ctx->use_ni) {
+        __m128i feedback = _mm_loadu_si128((const __m128i*)iv);
+        for (size_t i = 0; i < n; i++) {
+            __m128i ct = _mm_loadu_si128((const __m128i*)&in[i * AES_BLOCK_SIZE]);
+            __m128i state = ct;
+            
+            state = _mm_xor_si128(state, ((const __m128i*)ctx->dec_key_ni)[0]);
+            for (int r = 1; r < ctx->Nr; r++) {
+                state = _mm_aesdec_si128(state, ((const __m128i*)ctx->dec_key_ni)[r]);
+            }
+            state = _mm_aesdeclast_si128(state, ((const __m128i*)ctx->dec_key_ni)[ctx->Nr]);
+            
+            state = _mm_xor_si128(state, feedback);
+            feedback = ct;
+            _mm_storeu_si128((__m128i*)&out[i * AES_BLOCK_SIZE], state);
+        }
+        return n * AES_BLOCK_SIZE;
+    }
+#endif
 
     uint8_t tmp[AES_BLOCK_SIZE];
     uint8_t old[AES_BLOCK_SIZE];
     size_t i;
-    size_t n;
 
     memcpy(tmp, iv, AES_BLOCK_SIZE);
 
-    n = in_len / AES_BLOCK_SIZE;
     for(i=0; i < n; i++) {
         memcpy(old, &in[i * AES_BLOCK_SIZE], AES_BLOCK_SIZE);
         aes_internal_decrypt(ctx->dec_rk, ctx->Nr, &in[i * AES_BLOCK_SIZE], &out[i * AES_BLOCK_SIZE]);
@@ -703,6 +919,34 @@ int n2n_aes_init (const unsigned char *key, size_t key_size, n2n_aes_context_t *
     // key materiel handling
     (*ctx)->Nr = aes_internal_key_setup_enc((*ctx)->enc_rk/*[4*(Nr + 1)]*/, key, 8 * key_size);
                  aes_internal_key_setup_dec((*ctx)->dec_rk/*[4*(Nr + 1)]*/, key, 8 * key_size);
+
+#if HAS_X86_AESNI
+    (*ctx)->use_ni = detect_aes_ni();
+    if ((*ctx)->use_ni) {
+        __m128i *enc_rk = (__m128i*)(*ctx)->enc_key_ni;
+        __m128i *dec_rk = (__m128i*)(*ctx)->dec_key_ni;
+        if (key_size == 16) {
+            aes_ni_key_setup_128(key, enc_rk);
+        } else if (key_size == 32) {
+            aes_ni_key_setup_256(key, enc_rk);
+        } else {
+            /* 暂不支持 192bit 的硬件加速密钥扩展，回退到 pure C */
+            (*ctx)->use_ni = 0;
+        }
+
+        if ((*ctx)->use_ni) {
+            /* 按照 Intel AES-NI 规范生成解密的轮密钥 */
+            dec_rk[0] = enc_rk[(*ctx)->Nr];
+            for (int r = 1; r < (*ctx)->Nr; r++) {
+                dec_rk[r] = _mm_aesimc_si128(enc_rk[(*ctx)->Nr - r]);
+            }
+            dec_rk[(*ctx)->Nr] = enc_rk[0];
+        }
+    }
+#else
+    (*ctx)->use_ni = 0;
+#endif
+
     return 0;
 }
 

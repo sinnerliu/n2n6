@@ -196,6 +196,7 @@ struct n2n_edge
     size_t              rx_sup;
     int                 socks5_port;            /**< SOCKS5 listen port, 0 if disabled */
     int                 socks5_started;         /**< 1 if SOCKS5 proxy server is started */
+    int                 subnet_scanned;         /**< 1 if local subnet has been scanned by ARP */
 #ifdef _WIN32
     volatile int        keep_running;           /**< Set to 0 to stop tunReadThread */
 #endif
@@ -803,6 +804,69 @@ static void help() {
     printf("\n");
 }
 
+#pragma pack(push, 1)
+struct n2n_arp_hdr {
+    uint8_t  dst_mac[6];     // 广播: FF:FF:FF:FF:FF:FF
+    uint8_t  src_mac[6];     // 我们的 MAC
+    uint16_t eth_type;       // 0x0806 (htons(0x0806))
+    uint16_t hw_type;        // 0x0001 (htons(1))
+    uint16_t proto_type;     // 0x0800 (htons(0x0800))
+    uint8_t  hw_size;        // 6
+    uint8_t  proto_size;     // 4
+    uint16_t opcode;         // 0x0001 (htons(1))
+    uint8_t  sender_mac[6];   // 我们的 MAC
+    uint32_t sender_ip;      // 我们的 IP (网络字节序)
+    uint8_t  target_mac[6];   // 00:00:00:00:00:00
+    uint32_t target_ip;      // 目标 IP (网络字节序)
+};
+#pragma pack(pop)
+
+static void scan_subnet_arp(n2n_edge_t *eee) {
+    if (eee->device.ip_addr == 0 || eee->device.ip_prefixlen == 0) return;
+
+    uint32_t netmask = ip4_prefixlen_to_netmask(eee->device.ip_prefixlen);
+    uint32_t my_ip = eee->device.ip_addr;
+
+    uint32_t my_ip_h = ntohl(my_ip);
+    uint32_t netmask_h = ntohl(netmask);
+
+    uint32_t subnet_start = (my_ip_h & netmask_h) + 1;
+    uint32_t subnet_end = (my_ip_h | ~netmask_h) - 1;
+
+    // 优先保证连接安全：限制扫描范围，避免超大子网触发防火墙拦截或丢包
+    if (subnet_end - subnet_start > 256) {
+        traceEvent(TRACE_WARNING, "P2P 扫描: 当前子网过大，跳过主动 ARP 扫描");
+        return;
+    }
+
+    struct in_addr start_addr, end_addr;
+    start_addr.s_addr = htonl(subnet_start);
+    end_addr.s_addr = htonl(subnet_end);
+
+    traceEvent(TRACE_NORMAL, "P2P 扫描: 开始主动扫描并探测当前虚拟网段 IP (%s 到 %s)...",
+               inet_ntoa(start_addr), inet_ntoa(end_addr));
+
+    struct n2n_arp_hdr arp_req;
+    memset(&arp_req, 0, sizeof(arp_req));
+    memset(arp_req.dst_mac, 0xFF, 6);
+    memcpy(arp_req.src_mac, eee->device.mac_addr, 6);
+    arp_req.eth_type = htons(0x0806);
+    arp_req.hw_type = htons(1);
+    arp_req.proto_type = htons(0x0800);
+    arp_req.hw_size = 6;
+    arp_req.proto_size = 4;
+    arp_req.opcode = htons(1);
+    memcpy(arp_req.sender_mac, eee->device.mac_addr, 6);
+    arp_req.sender_ip = my_ip;
+    memset(arp_req.target_mac, 0, 6);
+
+    for (uint32_t ip_h = subnet_start; ip_h <= subnet_end; ip_h++) {
+        if (ip_h == my_ip_h) continue;
+        arp_req.target_ip = htonl(ip_h);
+        tuntap_write(&(eee->device), (unsigned char*)&arp_req, sizeof(arp_req));
+    }
+}
+
 
 /** Send a datagram to a socket defined by a n2n_sock_t */
 static ssize_t sendto_sock( SOCKET fd, const void * buf, size_t len, const n2n_sock_t * dest )
@@ -1362,9 +1426,13 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
     
     /* Try IPv4 punch if both sides have IPv4 */
     if ( peer_has_ipv4 && we_have_ipv4 ) {
-        send_probe(eee, &peer->sock, peer->mac_addr);
+        /* 并发向 WAN 和 LAN IP 发送探测包 */
+        send_probe(eee, &peer->sockets[0], peer->mac_addr);
+        if (peer->num_sockets == 2 && peer->sockets[1].family == AF_INET) {
+            send_probe(eee, &peer->sockets[1], peer->mac_addr);
+        }
         punched = 1;
-        traceEvent(TRACE_INFO, "IPv4 hole-punch started for %s",
+        traceEvent(TRACE_INFO, "IPv4 WAN+LAN parallel hole-punch started for %s",
                    macaddr_str(mac_tmp, peer->mac_addr));
     }
     
@@ -1379,6 +1447,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
     if (punched) {
         peer->punch_start_time = n2n_now();
         peer->last_punch_probe = peer->punch_start_time;
+        peer->last_punch_probe_ms = n2n_now_ms();
     }
 }
 
@@ -1427,32 +1496,46 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
             scan->punch_failed = 1;
             scan->punch_reset_time = now;
             if (!scan->psp_logged) {
-                traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s",
-                           PEER_ID(mac_tmp, scan));
+                n2n_sock_str_t sockbuf;
+                n2n_sock_t *active_sock = (scan->sock.family == AF_INET) ? &scan->sock : &scan->sock6;
+                traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s at %s",
+                           PEER_ID(mac_tmp, scan), sock_to_cstr(sockbuf, active_sock));
                 scan->psp_logged = 1;
             }
         } else if ( scan->punch_start_time != 0 &&
                     !scan->punch_failed &&
-                    (now - scan->punch_start_time) <= 5 &&
-                    (now - scan->last_punch_probe) >= 1 )
+                    (now - scan->punch_start_time) <= 5 )
         {
-            /* Retransmit PROBE every 1s for first 5s */
-            int sent_probe = 0;
+            /* 5秒内的打洞高频期 */
+            uint64_t now_ms = n2n_now_ms();
+            uint32_t elapsed_s = (uint32_t)(now - scan->punch_start_time);
             
-            /* Try IPv4 if available */
-            if ( scan->sock.family == AF_INET && eee->udp_sock != -1 ) {
-                send_probe(eee, &scan->sock, scan->mac_addr);
-                sent_probe = 1;
-            }
+            /* 优先保证连接，降低防火墙拦截率：在前 2 秒内，每 300 毫秒发射一次探测包（平衡直连与安全性）；
+             * 在第 2 到第 5 秒，每 1000 毫秒发射一次（降频模式）。 */
+            uint64_t interval_ms = (elapsed_s < 2) ? 300ULL : 1000ULL;
             
-            /* Try IPv6 if available */
-            if ( scan->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
-                send_probe(eee, &scan->sock6, scan->mac_addr);
-                sent_probe = 1;
-            }
-            
-            if (sent_probe) {
-                scan->last_punch_probe = now;
+            if ( (now_ms - scan->last_punch_probe_ms) >= interval_ms )
+            {
+                int sent_probe = 0;
+                
+                /* Try IPv4 if available */
+                if ( scan->sock.family == AF_INET && eee->udp_sock != -1 ) {
+                    send_probe(eee, &scan->sockets[0], scan->mac_addr);
+                    if ( scan->num_sockets == 2 && scan->sockets[1].family == AF_INET ) {
+                        send_probe(eee, &scan->sockets[1], scan->mac_addr);
+                    }
+                    sent_probe = 1;
+                }
+                
+                /* Try IPv6 if available */
+                if ( scan->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
+                    send_probe(eee, &scan->sock6, scan->mac_addr);
+                    sent_probe = 1;
+                }
+                
+                if (sent_probe) {
+                    scan->last_punch_probe_ms = now_ms;
+                }
             }
         } else if ( scan->register_retry_count > 0 && !scan->punch_failed )
         {
@@ -1502,7 +1585,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                 scan = scan->next;
                 continue;
             }
-            if ( (now - scan->punch_reset_time) > 40 )
+            if ( (now - scan->punch_reset_time) > 10 )
             {
                 scan->punch_retry_count++;
                 if ( scan->punch_retry_count >= 3 ) {
@@ -1646,11 +1729,11 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
 }
 
 /** Forward declarations for P2P registration functions. */
-void try_send_register( n2n_edge_t * eee,
+struct peer_info * try_send_register( n2n_edge_t * eee,
                         uint8_t from_supernode,
                         const n2n_mac_t mac,
                         const n2n_sock_t * peer );
-void try_send_register_lan( n2n_edge_t * eee,
+struct peer_info * try_send_register_lan( n2n_edge_t * eee,
                         uint8_t from_supernode,
                         const n2n_mac_t mac,
                         const n2n_sock_t * peer,
@@ -1674,7 +1757,7 @@ void set_peer_operational( n2n_edge_t * eee,
  *
  *  Called from the main loop when Rx a packet for our device mac.
  */
-void try_send_register( n2n_edge_t * eee,
+struct peer_info * try_send_register( n2n_edge_t * eee,
                         uint8_t from_supernode,
                         const n2n_mac_t mac,
                         const n2n_sock_t * peer )
@@ -1686,7 +1769,7 @@ void try_send_register( n2n_edge_t * eee,
         n2n_sock_str_t sockbuf;
 
         scan = (struct peer_info*) calloc( 1, sizeof( struct peer_info ) );
-        if (!scan) return;
+        if (!scan) return NULL;
 
         memcpy(scan->mac_addr, mac, N2N_MAC_SIZE);
         
@@ -1702,10 +1785,10 @@ void try_send_register( n2n_edge_t * eee,
         scan->punch_failed = 0;
         scan->register_retry_count = 0;
 
-        strncpy(scan->version, n2n_sw_version, sizeof(scan->version) - 1);
-        strncpy(scan->os_name, n2n_sw_osName, sizeof(scan->os_name) - 1);
-
         peer_list_add( &(eee->pending_peers), scan );
+
+        traceEvent(TRACE_NORMAL, "[P2P 探测] 发现新对端物理节点: MAC=%s, 公网地址=%s",
+                   macaddr_str(mac_buf, mac), sock_to_cstr(sockbuf, peer));
 
         /* Send REGISTER directly to peer (punch hole) and also via supernode */
         if ( from_supernode ) {
@@ -1742,11 +1825,12 @@ void try_send_register( n2n_edge_t * eee,
             start_punch(eee, scan);
         }
     }
+    return scan;
 }
 
 /** Like try_send_register but tries LAN address first; WAN punch deferred
  *  until LAN times out (handled in check_punch_timeouts). */
-void try_send_register_lan( n2n_edge_t * eee,
+struct peer_info * try_send_register_lan( n2n_edge_t * eee,
                         uint8_t from_supernode,
                         const n2n_mac_t mac,
                         const n2n_sock_t * peer,
@@ -1771,7 +1855,7 @@ void try_send_register_lan( n2n_edge_t * eee,
 
     if ( NULL == scan ) {
         scan = (struct peer_info*) calloc( 1, sizeof( struct peer_info ) );
-        if (!scan) return;
+        if (!scan) return NULL;
 
         memcpy(scan->mac_addr, mac, N2N_MAC_SIZE);
         /* Store address in correct slot based on family */
@@ -1785,7 +1869,7 @@ void try_send_register_lan( n2n_edge_t * eee,
         scan->sockets[1]   = *local_sock;
         scan->last_seen    = n2n_now();
         scan->lan_punch_start = n2n_now();
-        scan->lan_punch_done  = 0;
+        scan->lan_punch_done  = 1; /* 并发打洞：直接置 1 允许并行公网打洞 */
         
         /* Save temp_local_sock for LAN punch retransmissions */
         if (found) {
@@ -1807,7 +1891,7 @@ void try_send_register_lan( n2n_edge_t * eee,
         scan->sockets[0]  = *peer;
         scan->sockets[1]  = *local_sock;
         scan->lan_punch_start = n2n_now();
-        scan->lan_punch_done  = 0;
+        scan->lan_punch_done  = 1; /* 并发打洞：直接置 1 允许并行公网打洞 */
         scan->punch_start_time = 0;
         scan->punch_failed = 0;
         scan->register_retry_count = 0;
@@ -1829,10 +1913,16 @@ void try_send_register_lan( n2n_edge_t * eee,
         send_register(eee, local_sock);
     }
     
+    /* 并发打洞：不再串行等待 3 秒，直接开始向 WAN 和 supernode 发送注册并触发打洞 */
+    send_register(eee, &scan->sockets[0]);
+    send_register(eee, &(eee->supernode));
+    start_punch(eee, scan);
+
     {
         MACSTR_TMP(mac_tmp);
         traceEvent(TRACE_INFO, "LAN punch started for %s", macaddr_str(mac_tmp, mac));
     }
+    return scan;
 }
 
 /* Move the peer from the pending_peers list to the known_peers lists.
@@ -3055,6 +3145,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                 PEERS_LOCK(eee);
                 struct peer_info *scan = find_peer_by_mac(eee->known_peers, reg.srcMac);
                 if (NULL == scan) {
+                    struct peer_info *pending = NULL;
                     if ( reg.sock.family != 0 && reg.sock.port != 0 &&
                          eee->local_sock_ena &&
                          eee->my_public_sock.family == AF_INET &&
@@ -3065,11 +3156,32 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                         lan_sock.port = orig_sender->port;
                         traceEvent(TRACE_INFO, "Rx REGISTER with LAN addr %s - trying LAN direct",
                                    sock_to_cstr(sockbuf1, &lan_sock));
-                        try_send_register_lan(eee, from_supernode, reg.srcMac, orig_sender, &lan_sock);
+                        pending = try_send_register_lan(eee, from_supernode, reg.srcMac, orig_sender, &lan_sock);
                     } else {
-                        try_send_register(eee, from_supernode, reg.srcMac, orig_sender);
+                        pending = try_send_register(eee, from_supernode, reg.srcMac, orig_sender);
+                    }
+                    /* 直接使用返回的 pending 指针，免去多余的链表二次检索，高性能填充 */
+                    if (pending) {
+                        if (reg.version[0]) {
+                            strncpy(pending->version, reg.version, sizeof(pending->version) - 1);
+                            pending->version[sizeof(pending->version) - 1] = '\0';
+                        }
+                        if (reg.os_name[0]) {
+                            strncpy(pending->os_name, reg.os_name, sizeof(pending->os_name) - 1);
+                            pending->os_name[sizeof(pending->os_name) - 1] = '\0';
+                        }
                     }
                 } else {
+                    /* 更新已知节点的真实 version 和 os_name */
+                    if (reg.version[0]) {
+                        strncpy(scan->version, reg.version, sizeof(scan->version) - 1);
+                        scan->version[sizeof(scan->version) - 1] = '\0';
+                    }
+                    if (reg.os_name[0]) {
+                        strncpy(scan->os_name, reg.os_name, sizeof(scan->os_name) - 1);
+                        scan->os_name[sizeof(scan->os_name) - 1] = '\0';
+                    }
+
                     int peer_uses_ipv4 = (scan->sock.family == AF_INET);
                     int register_is_ipv4 = (orig_sender->family == AF_INET);
                     if ((peer_uses_ipv4 && register_is_ipv4) || (!peer_uses_ipv4 && !register_is_ipv4)) {
@@ -4862,6 +4974,11 @@ static int run_loop(n2n_edge_t * eee )
                     eee->socks5_started = 1;
                 }
             }
+        }
+
+        if (eee->device.ip_addr != 0 && eee->sn_ack_count > 0 && !eee->subnet_scanned) {
+            scan_subnet_arp(eee);
+            eee->subnet_scanned = 1;
         }
         PEERS_LOCK(eee);
         check_punch_timeouts(eee, nowTime);

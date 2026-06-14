@@ -1,6 +1,13 @@
 project(n2n C)
 cmake_minimum_required(VERSION 3.7)
 
+# 启用链接时全局优化 (LTO/IPO) 以极致压榨单线程性能
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_output)
+if(ipo_supported)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+endif()
+
 # N2n information
 set(N2N_VERSION 2.3_5.6)
 set(N2N_OSNAME ${CMAKE_SYSTEM_NAME})
@@ -135,7 +142,7 @@ endif()
 
 # Dead code elimination
 if(NOT DEFINED WIN32)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections -maes")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 endif()
 

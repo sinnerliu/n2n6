@@ -18,6 +18,15 @@ typedef struct n2n_aes_context_t {
     uint32_t enc_rk[60];
     uint32_t dec_rk[60];
     int      Nr;
+    /* 硬件 AES-NI 对齐的轮密钥存储，最大 Nr=14 (AES-256) */
+#if defined(_MSC_VER)
+    __declspec(align(16)) uint8_t enc_key_ni[240];
+    __declspec(align(16)) uint8_t dec_key_ni[240];
+#else
+    uint8_t  enc_key_ni[240] __attribute__((aligned(16)));
+    uint8_t  dec_key_ni[240] __attribute__((aligned(16)));
+#endif
+    int      use_ni; /* 1 表示启用硬件 AES-NI */
 } n2n_aes_context_t;
 
 int n2n_aes_cbc_encrypt(unsigned char *out, const unsigned char *in, size_t in_len,

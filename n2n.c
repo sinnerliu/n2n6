@@ -79,6 +79,25 @@ SOCKET open_socket(uint16_t local_port, int bind_any) {
     { int tos = 0x10; setsockopt(sock_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)); }
 #endif
 
+    /* 极致网络优化：禁用外层 UDP 校验和以压榨单线程网络 I/O 开销 */
+#ifdef _WIN32
+    {
+        int no_chksum = 1;
+        #ifndef UDP_NOCHECKSUM
+        #define UDP_NOCHECKSUM 1
+        #endif
+        setsockopt(sock_fd, IPPROTO_UDP, UDP_NOCHECKSUM, (const char*)&no_chksum, sizeof(no_chksum));
+    }
+#elif defined(__linux__)
+    {
+        int no_chksum = 1;
+        #ifndef SO_NO_CHECK
+        #define SO_NO_CHECK 11
+        #endif
+        setsockopt(sock_fd, SOL_SOCKET, SO_NO_CHECK, (const char*)&no_chksum, sizeof(no_chksum));
+    }
+#endif
+
     return sock_fd;
 }
 
@@ -188,6 +207,19 @@ time_t n2n_now(void) {
         if (first_clk == 0) first_clk = clk;
         return 1000 + (time_t)((clk - first_clk) / CLOCKS_PER_SEC);
     }
+}
+
+uint64_t n2n_now_ms(void) {
+#if defined(_WIN32)
+    return (uint64_t)GetTickCount64();
+#elif defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
 #endif
 }
 
