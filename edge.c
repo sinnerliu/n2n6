@@ -2621,7 +2621,12 @@ static int handle_PACKET( n2n_edge_t * eee,
     PEERS_LOCK(eee);
     struct peer_info *scan = find_peer_by_mac(eee->known_peers, pkt->srcMac);
     if (NULL == scan) {
-        try_send_register(eee, from_supernode, pkt->srcMac, orig_sender);
+        struct peer_info *pscan = find_peer_by_mac(eee->pending_peers, pkt->srcMac);
+        if (from_supernode && pscan) {
+            pscan->last_seen = now; /* 仅更新中转节点的活跃时间，不调用 try_send_register 以防 IP 污染和参数重置 */
+        } else {
+            try_send_register(eee, from_supernode, pkt->srcMac, orig_sender);
+        }
     } else if (!from_supernode) {
         /* P2P packet: refresh direct communication timestamp */
         scan->direct_seen = now;
@@ -2647,29 +2652,18 @@ static int handle_PACKET( n2n_edge_t * eee,
         }
     } else {
         /* Relayed packet from known peer.
-         * Check if sender's address changed - if so, move to pending
-         * for re-punch (中转保底: relay now, re-punch in background). */
-        int addr_changed = 0;
-        if (orig_sender->family == AF_INET) {
-            if (scan->sock.family == AF_INET) {
-                if (sock_equal(&scan->sock, orig_sender) != 0)
-                    addr_changed = 1;
-            } else {
-                addr_changed = 1;
-            }
-        } else if (orig_sender->family == AF_INET6) {
-            if (scan->sock6.family == AF_INET6) {
-                if (sock_equal(&scan->sock6, orig_sender) != 0)
-                    addr_changed = 1;
-            } else {
-                addr_changed = 1;
-            }
+         * 如果直连通道已经有一段时间（比如超过 10 秒）没有收到直连包了，说明直连可能已断开，
+         * 需要移回 pending_peers 进行重新打洞（中转保底：后台重新打洞）。
+         * 如果直连通道在 10 秒内仍有通信（包括直连刚成功的情况），则这只是网络延迟中转包，忽略之。 */
+        int need_repunch = 0;
+        if (scan->direct_seen > 0 && (now - scan->direct_seen) > 10) {
+            need_repunch = 1;
         }
 
-        if (addr_changed) {
+        if (need_repunch) {
             macstr_t mac_buf2;
-            traceEvent(TRACE_INFO, "Relayed packet: %s addr changed, move to pending for re-punch",
-                       macaddr_str(mac_buf2, pkt->srcMac));
+            traceEvent(TRACE_INFO, "Relayed packet: %s direct link inactive for %lds, move to pending for re-punch",
+                       macaddr_str(mac_buf2, pkt->srcMac), (long)(now - scan->direct_seen));
 
             struct peer_info *prev = NULL, *s = eee->known_peers;
             while (s && s != scan) { prev = s; s = s->next; }
