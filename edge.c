@@ -1985,7 +1985,7 @@ void set_peer_operational( n2n_edge_t * eee,
         if (!scan->p2p_logged) {
             char mac_buf[18];
             n2n_sock_str_t sockbuf;
-            traceEvent( TRACE_NORMAL, "P2P direct with %s at %s",
+            traceEvent( TRACE_DEBUG, "P2P direct with %s at %s",
                         PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ) );
             scan->p2p_logged = 1;
         }
