@@ -1783,6 +1783,8 @@ struct peer_info * try_send_register( n2n_edge_t * eee,
         scan->register_retry_count = 0;
 
         peer_list_add( &(eee->pending_peers), scan );
+        scan->last_query_sent = n2n_now();
+        send_query_peer(eee, mac); /* 新建节点时，主动向 Supernode 查询其详情（包含协议版本和操作系统系统） */
 
         traceEvent(TRACE_NORMAL, "[P2P Punch] Found new peer physical node: MAC=%s, WAN=%s",
                    macaddr_str(mac_buf, mac), sock_to_cstr(sockbuf, peer));
@@ -1881,6 +1883,8 @@ struct peer_info * try_send_register_lan( n2n_edge_t * eee,
         }
 
         peer_list_add( &(eee->pending_peers), scan );
+        scan->last_query_sent = n2n_now();
+        send_query_peer(eee, mac); /* 新建节点时，主动向 Supernode 查询其详情（包含协议版本和操作系统系统） */
     } else {
         /* Update address in correct slot based on family */
         if (peer->family == AF_INET6) {
