@@ -55,7 +55,7 @@ static void* socks5_listen_thread(void* lpArg);
 int start_socks5(uint32_t ip_addr, int port) {
     SOCKET listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_fd == INVALID_SOCKET) {
-        traceEvent(TRACE_ERROR, "SOCKS5: 无法创建监听套接字");
+        traceEvent(TRACE_ERROR, "SOCKS5: Failed to create listening socket");
         return -1;
     }
 
@@ -71,13 +71,13 @@ int start_socks5(uint32_t ip_addr, int port) {
     if (bind(listen_fd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) == SOCKET_ERROR) {
         struct in_addr in_ip;
         in_ip.s_addr = ip_addr;
-        traceEvent(TRACE_ERROR, "SOCKS5: 绑定到地址 %s:%d 失败 (端口可能已被占用)", inet_ntoa(in_ip), port);
+        traceEvent(TRACE_ERROR, "SOCKS5: Failed to bind to %s:%d (port might be in use)", inet_ntoa(in_ip), port);
         closesocket(listen_fd);
         return -1;
     }
 
     if (listen(listen_fd, 10) == SOCKET_ERROR) {
-        traceEvent(TRACE_ERROR, "SOCKS5: 监听端口失败");
+        traceEvent(TRACE_ERROR, "SOCKS5: Failed to listen on port");
         closesocket(listen_fd);
         return -1;
     }
@@ -85,7 +85,7 @@ int start_socks5(uint32_t ip_addr, int port) {
     // 将 listen_fd 封装好传递给异步监听线程
     SOCKET *p_fd = malloc(sizeof(SOCKET));
     if (!p_fd) {
-        traceEvent(TRACE_ERROR, "SOCKS5: 分配内存失败");
+        traceEvent(TRACE_ERROR, "SOCKS5: Failed to allocate memory");
         closesocket(listen_fd);
         return -1;
     }
@@ -96,7 +96,7 @@ int start_socks5(uint32_t ip_addr, int port) {
     if (hThread != NULL) {
         CloseHandle(hThread);
     } else {
-        traceEvent(TRACE_ERROR, "SOCKS5: 无法创建监听线程");
+        traceEvent(TRACE_ERROR, "SOCKS5: Failed to create listening thread");
         closesocket(listen_fd);
         free(p_fd);
         return -1;
@@ -106,7 +106,7 @@ int start_socks5(uint32_t ip_addr, int port) {
     if (pthread_create(&thread_id, NULL, socks5_listen_thread, (void*)p_fd) == 0) {
         pthread_detach(thread_id);
     } else {
-        traceEvent(TRACE_ERROR, "SOCKS5: 无法创建监听线程");
+        traceEvent(TRACE_ERROR, "SOCKS5: Failed to create listening thread");
         closesocket(listen_fd);
         free(p_fd);
         return -1;
@@ -115,7 +115,7 @@ int start_socks5(uint32_t ip_addr, int port) {
 
     struct in_addr in_ip;
     in_ip.s_addr = ip_addr;
-    traceEvent(TRACE_NORMAL, "SOCKS5: 成功启动，正在监听在 %s:%d", inet_ntoa(in_ip), port);
+    traceEvent(TRACE_NORMAL, "SOCKS5: Started successfully, listening on %s:%d", inet_ntoa(in_ip), port);
     return 0;
 }
 
@@ -143,7 +143,7 @@ static void* socks5_listen_thread(void* lpArg)
         int select_ret = select((int)(listen_fd + 1), &read_fds, NULL, NULL, &timeout);
         if (select_ret < 0) {
             if (g_edge_running) {
-                traceEvent(TRACE_ERROR, "SOCKS5: 监听套接字 select 错误");
+                traceEvent(TRACE_ERROR, "SOCKS5: Listening socket select error");
             }
             break;
         }
@@ -184,7 +184,7 @@ static void* socks5_listen_thread(void* lpArg)
     }
 
     closesocket(listen_fd);
-    traceEvent(TRACE_NORMAL, "SOCKS5: 监听套接字已关闭，SOCKS5 服务终止");
+    traceEvent(TRACE_NORMAL, "SOCKS5: Listening socket closed, SOCKS5 service terminated");
     return 0;
 }
 

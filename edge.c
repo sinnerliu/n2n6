@@ -835,7 +835,7 @@ static void scan_subnet_arp(n2n_edge_t *eee) {
 
     // 优先保证连接安全：限制扫描范围，避免超大子网触发防火墙拦截或丢包
     if (subnet_end - subnet_start > 256) {
-        traceEvent(TRACE_WARNING, "P2P 扫描: 当前子网过大，跳过主动 ARP 扫描");
+        traceEvent(TRACE_WARNING, "P2P scan: subnet too large, skipping active ARP scanning");
         return;
     }
 
@@ -843,7 +843,7 @@ static void scan_subnet_arp(n2n_edge_t *eee) {
     start_addr.s_addr = htonl(subnet_start);
     end_addr.s_addr = htonl(subnet_end);
 
-    traceEvent(TRACE_NORMAL, "P2P 扫描: 开始主动扫描并探测当前虚拟网段 IP (%s 到 %s)...",
+    traceEvent(TRACE_NORMAL, "P2P scan: starting active scanning and probing virtual subnet IPs (%s to %s)...",
                inet_ntoa(start_addr), inet_ntoa(end_addr));
 
     struct n2n_arp_hdr arp_req;
