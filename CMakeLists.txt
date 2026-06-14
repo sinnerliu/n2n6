@@ -1,7 +1,8 @@
+cmake_minimum_required(VERSION 3.9)
 project(n2n C)
-cmake_minimum_required(VERSION 3.7)
 
-# 启用链接时全局优化 (LTO/IPO) 以极致压榨单线程性能
+# 启用链接时全局优化 (LTO/IPO) 策略与支持检查，极致压榨单线程性能
+cmake_policy(SET CMP0069 NEW)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_output)
 if(ipo_supported)
