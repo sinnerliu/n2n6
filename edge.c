@@ -1787,7 +1787,7 @@ struct peer_info * try_send_register( n2n_edge_t * eee,
 
         peer_list_add( &(eee->pending_peers), scan );
 
-        traceEvent(TRACE_NORMAL, "[P2P 探测] 发现新对端物理节点: MAC=%s, 公网地址=%s",
+        traceEvent(TRACE_NORMAL, "[P2P Punch] Found new peer physical node: MAC=%s, WAN=%s",
                    macaddr_str(mac_buf, mac), sock_to_cstr(sockbuf, peer));
 
         /* Send REGISTER directly to peer (punch hole) and also via supernode */
