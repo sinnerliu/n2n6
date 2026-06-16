@@ -2768,7 +2768,7 @@ static int handle_PACKET( n2n_edge_t * eee,
                     if ( !sp ) sp = find_peer_by_mac(eee->pending_peers, pkt->srcMac);
                     if ( sp && sp->assigned_ip == 0 ) {
                         sp->assigned_ip = ntohl(src_ip);
-                        char mac_buf[18];
+                        macstr_t mac_buf;
                         n2n_sock_str_t sockbuf;
                         struct in_addr vip;
                         vip.s_addr = htonl(sp->assigned_ip);

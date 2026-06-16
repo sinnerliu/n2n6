@@ -84,7 +84,7 @@ int cc20_crypt (unsigned char *out, const unsigned char *in, size_t in_len,
 }
 
 
-#elif defined (__SSE2__)  // SSE2 ---------------------------------------------------------------------------------
+#elif defined (__SSE2__) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(_M_AMD64) || defined(_M_X64)  // SSE2 ---------------------------------------------------------------------------------
 
 
 // taken (and heavily modified and enhanced) from
@@ -105,7 +105,7 @@ int cc20_crypt (unsigned char *out, const unsigned char *in, size_t in_len,
 #define ONE   _mm_setr_epi32(1, 0, 0, 0)
 #define TWO   _mm_setr_epi32(2, 0, 0, 0)
 
-#if defined (__SSSE3__) // --- SSSE3
+#if defined (__SSSE3__) || defined(_M_AMD64) || defined(_M_X64) // --- SSSE3
 
 #define L8  _mm_set_epi32(0x0e0d0c0fL, 0x0a09080bL, 0x06050407L, 0x02010003L)
 #define L16 _mm_set_epi32(0x0d0c0f0eL, 0x09080b0aL, 0x05040706L, 0x01000302L)
@@ -355,44 +355,33 @@ int cc20_crypt (unsigned char *out, const unsigned char *in, size_t in_len,
                 const unsigned char *iv, cc20_context_t *ctx) {
 
     uint8_t   *keystream8 = (uint8_t*)ctx->keystream32;
-    uint32_t * in_p       = (uint32_t*)in;
-    uint32_t * out_p      = (uint32_t*)out;
-    size_t   tmp_len      = in_len;
+    size_t    tmp_len     = in_len;
+    uint32_t  aligned_in[16], aligned_out[16];
+    size_t    i, j;
 
     cc20_init_context(ctx, iv);
 
     while(in_len >= 64) {
         cc20_block_next(ctx);
 
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 0]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 1]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 2]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 3]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 4]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 5]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 6]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 7]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 8]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[ 9]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[10]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[11]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[12]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[13]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[14]; in_p++; out_p++;
-        *(uint32_t*)out_p = *(uint32_t*)in_p ^ ctx->keystream32[15]; in_p++; out_p++;
+        /* Copy input to aligned buffer, XOR, copy back.
+         * Avoids unaligned uint32_t* access which is slow on MIPS. */
+        memcpy(aligned_in, in, 64);
+        for(i = 0; i < 16; i++)
+            aligned_out[i] = aligned_in[i] ^ ctx->keystream32[i];
+        memcpy(out, aligned_out, 64);
 
+        in  += 64;
+        out += 64;
         in_len -= 64;
     }
 
     if(in_len > 0) {
         cc20_block_next(ctx);
 
-        tmp_len -= in_len;
-        while(in_len > 0) {
-            out[tmp_len] = in[tmp_len] ^ keystream8[tmp_len%64];
-            tmp_len++;
-            in_len--;
-        }
+        j = tmp_len - in_len; /* = already processed bytes */
+        for(i = 0; i < in_len; i++)
+            out[i] = in[i] ^ keystream8[(j + i) % 64];
     }
 
     return(0);

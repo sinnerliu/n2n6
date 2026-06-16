@@ -55,6 +55,14 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Generate Artifact Name
+        shell: bash
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          ARCH_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f1)
+          REST_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f2-)
+          echo "ARTIFACT_NAME=n2n-${REST_PART}-${ARCH_PART}-${SHORT_SHA}" >> $GITHUB_ENV
+
       - name: Setup MSVC environment
         if: runner.os == 'windows'
         uses: ilammy/msvc-dev-cmd@v1.13.0
@@ -140,7 +148,7 @@ jobs:
         if: always()
         continue-on-error: true
         with:
-          name: ${{ env.TARGET }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: |
             build/edge${{ runner.os == 'Windows' && '.exe' || '' }}
             build/supernode${{ runner.os == 'Windows' && '.exe' || '' }}
