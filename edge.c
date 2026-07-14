@@ -3096,8 +3096,9 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
            (struct sockaddr*) &sender_sock, i);
 }
 
-static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t recvlen, struct sockaddr_in6 * sender_sock )
+static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t recvlen, struct sockaddr_in6 * sender_sock_in )
 {
+    struct sockaddr_in6 sender_sock = *sender_sock_in;
     n2n_common_t        cmn; /* common fields in the packet header */
     static int          first_ok_message_shown = 0;
 
@@ -3106,38 +3107,13 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
     macstr_t            mac_buf1;
     macstr_t            mac_buf2;
 
-    uint8_t             udp_buf[N2N_PKT_BUF_SIZE];      /* Compete UDP packet */
-    ssize_t             recvlen;
     size_t              rem;
     size_t              idx;
     size_t              msg_type;
     uint8_t             from_supernode;
-    struct sockaddr_in6 sender_sock;
     n2n_sock_t          sender;
     n2n_sock_t *        orig_sender = NULL;
     time_t              now = 0;
-
-    size_t              i;
-
-    i = sizeof(sender_sock);
-    recvlen = recvfrom(fd, udp_buf, N2N_PKT_BUF_SIZE, 0/*flags*/,
-                      (struct sockaddr*) &sender_sock, (socklen_t*) &i);
-
-    if ( recvlen < 0 )
-    {
-#ifdef _WIN32
-        int err = WSAGetLastError();
-        if (err != WSAEWOULDBLOCK) {
-            char fallback[256];
-            const char *message = n2n_win32_format_error(err, fallback, sizeof(fallback));
-            traceEvent( TRACE_DEBUG, "recvfrom failed [%d]: %s", err, message );
-        }
-#else
-        traceEvent(TRACE_DEBUG, "recvfrom failed with %s", strerror(errno) );
-#endif
-
-        return; /* failed to receive data from UDP */
-    }
 
     /* Determine sender address from socket family */
     sender.family = (uint8_t) sender_sock.sin6_family;
