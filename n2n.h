@@ -251,6 +251,8 @@ struct peer_info {
     uint8_t             same_lan_as_sn;    /* 1 if edge is in same LAN as supernode */
     uint8_t             last_connection_type; /* 上一次的连接类型：0=未知/断开, 1=PsP中转, 2=P2P直连 */
     n2n_sock_t          last_conn_sock;       /* 上一次记录的直连套接字地址 */
+    time_t              keepalive_interval;   /* 自适应保活探测周期 */
+    int                 keepalive_success_count; /* 连续成功收到的保活 ACK 计数 */
 };
 
 struct n2n_edge; /* defined in edge.c */

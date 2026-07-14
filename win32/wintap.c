@@ -262,6 +262,42 @@ static uint32_t set_static_routes(struct tuntap_dev* device) {
     return NO_ERROR;
 }
 
+static DWORD WINAPI tuntap_write_thread(LPVOID lpArg) {
+    struct tuntap_dev *tuntap = (struct tuntap_dev *)lpArg;
+    OVERLAPPED overlap_write = {0};
+    overlap_write.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (!overlap_write.hEvent) {
+        return 1;
+    }
+
+    while (tuntap->write_thread_running) {
+        int head = tuntap->write_queue_head;
+        int tail = tuntap->write_queue_tail;
+        if (head == tail) {
+            WaitForSingleObject(tuntap->write_event, 50); /* 50ms 超时保底 */
+            continue;
+        }
+
+        struct win_write_packet *pkt = &tuntap->write_queue[head];
+        ResetEvent(overlap_write.hEvent);
+        uint32_t write_size = 0;
+
+        if (!WriteFile(tuntap->device_handle, pkt->buf, (uint32_t)pkt->len, &write_size, &overlap_write)) {
+            if (GetLastError() == ERROR_IO_PENDING) {
+                WaitForSingleObject(overlap_write.hEvent, INFINITE);
+                GetOverlappedResult(tuntap->device_handle, &overlap_write, &write_size, FALSE);
+            }
+        }
+
+        EnterCriticalSection(&tuntap->write_lock);
+        tuntap->write_queue_head = (head + 1) % N2N_WRITE_QUEUE_SIZE;
+        LeaveCriticalSection(&tuntap->write_lock);
+    }
+
+    CloseHandle(overlap_write.hEvent);
+    return 0;
+}
+
 int tuntap_open(struct tuntap_dev *device, struct tuntap_config* config) {
     HKEY key, key2;
     LONG rc;
@@ -439,6 +475,22 @@ int tuntap_open(struct tuntap_dev *device, struct tuntap_config* config) {
 
         InitializeCriticalSection(&device->write_lock);
 
+        /* 初始化 Windows 异步写网卡队列与工作线程 */
+        device->write_queue_head = 0;
+        device->write_queue_tail = 0;
+        device->write_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+        device->write_thread_running = true;
+        device->write_thread = CreateThread(NULL, 0, tuntap_write_thread, (void*)device, 0, NULL);
+        if (!device->write_event || !device->write_thread) {
+            device->write_thread_running = false;
+            if (device->write_event) CloseHandle(device->write_event);
+            if (device->write_thread) CloseHandle(device->write_thread);
+            DeleteCriticalSection(&device->write_lock);
+            CloseHandle(device->device_handle);
+            device->device_handle = INVALID_HANDLE_VALUE;
+            continue;
+        }
+
         found = 1;
         break;
     }
@@ -490,33 +542,25 @@ ssize_t tuntap_read(struct tuntap_dev *tuntap, unsigned char *buf, size_t len) {
 /* ************************************************ */
 
 ssize_t tuntap_write(struct tuntap_dev *tuntap, unsigned char *buf, size_t len) {
-    uint32_t write_size;
+    if (!tuntap->write_thread_running) return -1;
+    if (len > 1600) return -1;
 
     EnterCriticalSection(&tuntap->write_lock);
-
-    ResetEvent(tuntap->overlap_write.hEvent);
-    if (WriteFile(tuntap->device_handle,
-        buf,
-        (uint32_t) len,
-        &write_size,
-        &tuntap->overlap_write))
-    {
+    int next_tail = (tuntap->write_queue_tail + 1) % N2N_WRITE_QUEUE_SIZE;
+    if (next_tail == tuntap->write_queue_head) {
         LeaveCriticalSection(&tuntap->write_lock);
-        return (ssize_t) write_size;
+        traceEvent(TRACE_WARNING, "TAP write queue overflow, dropping packet");
+        return -1;
     }
 
-    switch (GetLastError()) {
-    case ERROR_IO_PENDING:
-        WaitForSingleObject(tuntap->overlap_write.hEvent, INFINITE);
-        GetOverlappedResult(tuntap->device_handle, &tuntap->overlap_write, &write_size, FALSE);
-        LeaveCriticalSection(&tuntap->write_lock);
-        return (ssize_t) write_size;
-    default:
-        break;
-    }
-
+    struct win_write_packet *pkt = &tuntap->write_queue[tuntap->write_queue_tail];
+    memcpy(pkt->buf, buf, len);
+    pkt->len = len;
+    tuntap->write_queue_tail = next_tail;
     LeaveCriticalSection(&tuntap->write_lock);
-    return -1;
+
+    SetEvent(tuntap->write_event);
+    return (ssize_t)len;
 }
 
 /* ************************************************ */
@@ -525,6 +569,20 @@ void tuntap_close(struct tuntap_dev *tuntap) {
     if (tuntap->device_name) {
         tuntap->device_name[0] = '\0';
     }
+    tuntap->write_thread_running = false;
+    if (tuntap->write_event) {
+        SetEvent(tuntap->write_event);
+    }
+    if (tuntap->write_thread) {
+        WaitForSingleObject(tuntap->write_thread, 2000);
+        CloseHandle(tuntap->write_thread);
+        tuntap->write_thread = NULL;
+    }
+    if (tuntap->write_event) {
+        CloseHandle(tuntap->write_event);
+        tuntap->write_event = NULL;
+    }
+    DeleteCriticalSection(&tuntap->write_lock);
     CloseHandle(tuntap->device_handle);
 }
 
@@ -533,6 +591,21 @@ int tuntap_restart( tuntap_dev* device ) {
     uint32_t status = true;
     uint32_t rc;
     long len;
+
+    /* 先优雅地停止和释放旧的异步工作线程 */
+    device->write_thread_running = false;
+    if (device->write_event) {
+        SetEvent(device->write_event);
+    }
+    if (device->write_thread) {
+        WaitForSingleObject(device->write_thread, 2000);
+        CloseHandle(device->write_thread);
+        device->write_thread = NULL;
+    }
+    if (device->write_event) {
+        CloseHandle(device->write_event);
+        device->write_event = NULL;
+    }
 
     CloseHandle(device->device_handle);
 
@@ -591,6 +664,19 @@ int tuntap_restart( tuntap_dev* device ) {
         W32_ERROR(GetLastError(), error);
         traceEvent(TRACE_ERROR, "Unable to enable TAP adapter %ls: %ls", device->device_name, error);
         W32_ERROR_FREE(error);
+        return -1;
+    }
+
+    /* 重新开启新的写队列与工作线程 */
+    device->write_queue_head = 0;
+    device->write_queue_tail = 0;
+    device->write_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+    device->write_thread_running = true;
+    device->write_thread = CreateThread(NULL, 0, tuntap_write_thread, (void*)device, 0, NULL);
+    if (!device->write_event || !device->write_thread) {
+        device->write_thread_running = false;
+        if (device->write_event) CloseHandle(device->write_event);
+        if (device->write_thread) CloseHandle(device->write_thread);
         return -1;
     }
 

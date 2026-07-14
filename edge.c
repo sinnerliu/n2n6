@@ -197,6 +197,8 @@ struct n2n_edge
     int                 socks5_port;            /**< SOCKS5 listen port, 0 if disabled */
     int                 socks5_started;         /**< 1 if SOCKS5 proxy server is started */
     int                 subnet_scanned;         /**< 1 if local subnet has been scanned by ARP */
+    int                 consecutive_reg_failures;  /**< 连续注册失败的次数 */
+    time_t              next_reg_time;             /**< 下一次允许注册的时间 */
 #ifdef _WIN32
     volatile int        keep_running;           /**< Set to 0 to stop tunReadThread */
 #endif
@@ -1663,9 +1665,14 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
             continue;
         }
 
+        /* 初始化自适应保活间隔 */
+        if ( scan->keepalive_interval < KEEPALIVE_IDLE_SECONDS ) {
+            scan->keepalive_interval = KEEPALIVE_IDLE_SECONDS;
+        }
+
         if ( scan->last_probe_sent == 0 ) {
             /* No probe sent yet: send one if idle too long */
-            if ( idle >= KEEPALIVE_IDLE_SECONDS ) {
+            if ( idle >= scan->keepalive_interval ) {
                 n2n_common_t cmn;
                 n2n_PROBE_t probe;
                 uint8_t pktbuf[N2N_PKT_BUF_SIZE];
@@ -1683,8 +1690,8 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
                 sendto_sock(sock_for_dest(eee, keepalive_addr), pktbuf, idx, keepalive_addr);
 
                 scan->last_probe_sent = now;
-                traceEvent(TRACE_INFO, "Keepalive PROBE sent to %s (idle %lds)",
-                           macaddr_str(mac_tmp, scan->mac_addr), (long)idle);
+                traceEvent(TRACE_INFO, "Keepalive PROBE sent to %s (idle %lds, interval %lds)",
+                           macaddr_str(mac_tmp, scan->mac_addr), (long)idle, (long)scan->keepalive_interval);
             }
         } else {
             /* Probe already sent: check if reply came back */
@@ -1696,6 +1703,10 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
                 /* No reply within timeout */
                 scan->keepalive_fails++;
                 scan->last_probe_sent = 0;
+
+                /* 超时代表丢包或NAT映射老化，重置心跳探测周期至默认 12 秒 */
+                scan->keepalive_interval = KEEPALIVE_IDLE_SECONDS;
+                scan->keepalive_success_count = 0;
 
                 traceEvent(TRACE_NORMAL, "Keepalive PROBE no reply from %s (fail %u/%u)",
                            PEER_ID(mac_tmp, scan),
@@ -2209,6 +2220,11 @@ static void update_peer_address(n2n_edge_t * eee,
  */
 static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
 {
+    if ( nowTime < eee->next_reg_time )
+    {
+        return; /* 在指数退避时间内，暂不发起注册 */
+    }
+
     if ( nowTime > (time_t) (eee->last_register_req + 30) )
     {
         eee->sn_wait = 0;
@@ -2231,10 +2247,20 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
     if ( 0 == eee->sup_attempts )
     {
         ++(eee->sn_idx);
-    if (eee->sn_idx >= eee->sn_num) eee->sn_idx=0;
+        if (eee->sn_idx >= eee->sn_num) eee->sn_idx=0;
         traceEvent(TRACE_WARNING, "Supernode not responding - moving to %u of %u",
                    (unsigned int)eee->sn_idx, (unsigned int)eee->sn_num);
         eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
+
+        /* 对该 supernode 尝试失败，增加避让次数并计算指数退避时间 */
+        eee->consecutive_reg_failures++;
+        if (eee->consecutive_reg_failures > 6) {
+            eee->consecutive_reg_failures = 6; /* 最大避让大约 320 秒 */
+        }
+        time_t backoff = 5 * (1 << eee->consecutive_reg_failures);
+        time_t jitter = rand() % 5;
+        eee->next_reg_time = nowTime + backoff + jitter;
+        traceEvent(TRACE_WARNING, "Backing off re-registration for %ld seconds due to failures", (long)(backoff + jitter));
         
         /* Re-resolve supernode address when switching to a different supernode */
         if(eee->re_resolve_supernode_ip)
@@ -3338,6 +3364,18 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                 kp->direct_seen = now;
                 kp->last_probe_sent = 0;
                 kp->keepalive_fails = 0;
+
+                /* 顺利收到心跳应答，增加成功计数，逐步翻倍延长心跳间隔（最高60秒） */
+                kp->keepalive_success_count++;
+                if (kp->keepalive_success_count >= 3) {
+                    if (kp->keepalive_interval < KEEPALIVE_IDLE_SECONDS) {
+                        kp->keepalive_interval = KEEPALIVE_IDLE_SECONDS;
+                    }
+                    kp->keepalive_interval = (kp->keepalive_interval * 2 > 60) ? 60 : (kp->keepalive_interval * 2);
+                    kp->keepalive_success_count = 0;
+                    traceEvent(TRACE_INFO, "Keepalive interval for %s extended to %ld seconds",
+                               macaddr_str(mac_buf1, kp->mac_addr), (long)kp->keepalive_interval);
+                }
             }
             struct peer_info * scan = find_peer_by_mac(eee->pending_peers, ack.dstMac);
             if ( scan && !scan->punch_failed ) {
@@ -3566,6 +3604,8 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                         eee->last_sup = now;
                         eee->sn_wait = 0;
                         eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
+                        eee->consecutive_reg_failures = 0;
+                        eee->next_reg_time = 0;
 
                         if (default_ip_assignment && ra.dev_addr.net_addr != 0) {
                             struct in_addr addr;
