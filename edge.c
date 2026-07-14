@@ -23,6 +23,10 @@
  *
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "n2n.h"
 #include "n2n_transforms.h"
 #include "speck.h"
@@ -3092,8 +3096,7 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
            (struct sockaddr*) &sender_sock, i);
 }
 
-/** Read a datagram from the main UDP socket to the internet. */
-static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
+static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t recvlen, struct sockaddr_in6 * sender_sock )
 {
     n2n_common_t        cmn; /* common fields in the packet header */
     static int          first_ok_message_shown = 0;
@@ -3745,6 +3748,68 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
     {
         traceEvent(TRACE_WARNING, "Received packet with invalid community");
     }
+}
+
+/* ***************************************************** */
+
+static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
+{
+#if defined(__linux__)
+    #define N2N_RECVMMSG_VLEN 16
+    static struct mmsghdr msgs[N2N_RECVMMSG_VLEN];
+    static struct iovec iovecs[N2N_RECVMMSG_VLEN];
+    static uint8_t bufs[N2N_RECVMMSG_VLEN][N2N_PKT_BUF_SIZE];
+    static struct sockaddr_in6 sender_socks[N2N_RECVMMSG_VLEN];
+    static int initialized = 0;
+
+    if (!initialized) {
+        memset(msgs, 0, sizeof(msgs));
+        for (int i = 0; i < N2N_RECVMMSG_VLEN; i++) {
+            iovecs[i].iov_base = bufs[i];
+            iovecs[i].iov_len = N2N_PKT_BUF_SIZE;
+            msgs[i].msg_hdr.msg_iov = &iovecs[i];
+            msgs[i].msg_hdr.msg_iovlen = 1;
+            msgs[i].msg_hdr.msg_name = &sender_socks[i];
+            msgs[i].msg_hdr.msg_namelen = sizeof(sender_socks[i]);
+        }
+        initialized = 1;
+    }
+
+    int retval = recvmmsg(fd, msgs, N2N_RECVMMSG_VLEN, MSG_DONTWAIT, NULL);
+    if (retval < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            traceEvent(TRACE_DEBUG, "recvmmsg failed with %s", strerror(errno));
+        }
+        return;
+    }
+
+    for (int r = 0; r < retval; r++) {
+        ssize_t recvlen = msgs[r].msg_len;
+        if (recvlen > 0) {
+            handleIPSocketPacket(eee, bufs[r], recvlen, &sender_socks[r]);
+        }
+    }
+#else
+    uint8_t             udp_buf[N2N_PKT_BUF_SIZE];
+    struct sockaddr_in6 sender_sock;
+    socklen_t           i = sizeof(sender_sock);
+    ssize_t             recvlen = recvfrom(fd, udp_buf, N2N_PKT_BUF_SIZE, 0,
+                                           (struct sockaddr*) &sender_sock, &i);
+    if ( recvlen < 0 ) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        if (err != WSAEWOULDBLOCK) {
+            char fallback[256];
+            const char *message = n2n_win32_format_error(err, fallback, sizeof(fallback));
+            traceEvent( TRACE_DEBUG, "recvfrom failed [%d]: %s", err, message );
+        }
+#else
+        traceEvent(TRACE_DEBUG, "recvfrom failed with %s", strerror(errno) );
+#endif
+        return;
+    }
+    handleIPSocketPacket(eee, udp_buf, recvlen, &sender_sock);
+#endif
 }
 
 /* ***************************************************** */

@@ -8,6 +8,10 @@
  */
 
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "n2n.h"
 #include "n2n_transforms.h"
 #include "n2n_wire.h"
@@ -2260,6 +2264,38 @@ static int run_loop( n2n_sn_t * sss )
         if(rc > 0)
         {
             if (sss->sock != -1 && FD_ISSET(sss->sock, &socket_mask)) {
+#if defined(__linux__)
+                #define SN_RECVMMSG_VLEN 16
+                static struct mmsghdr msgs[SN_RECVMMSG_VLEN];
+                static struct iovec iovecs[SN_RECVMMSG_VLEN];
+                static uint8_t bufs[SN_RECVMMSG_VLEN][N2N_SN_PKTBUF_SIZE];
+                static struct sockaddr_storage sender_socks[SN_RECVMMSG_VLEN];
+                static int initialized = 0;
+
+                if (!initialized) {
+                    memset(msgs, 0, sizeof(msgs));
+                    for (int i = 0; i < SN_RECVMMSG_VLEN; i++) {
+                        iovecs[i].iov_base = bufs[i];
+                        iovecs[i].iov_len = N2N_SN_PKTBUF_SIZE;
+                        msgs[i].msg_hdr.msg_iov = &iovecs[i];
+                        msgs[i].msg_hdr.msg_iovlen = 1;
+                        msgs[i].msg_hdr.msg_name = &sender_socks[i];
+                        msgs[i].msg_hdr.msg_namelen = sizeof(sender_socks[i]);
+                    }
+                    initialized = 1;
+                }
+
+                int retval = recvmmsg(sss->sock, msgs, SN_RECVMMSG_VLEN, MSG_DONTWAIT, NULL);
+                if (retval > 0) {
+                    for (int r = 0; r < retval; r++) {
+                        ssize_t bread = msgs[r].msg_len;
+                        if (bread > 0) {
+                            process_udp( sss, (struct sockaddr*) &sender_socks[r], msgs[r].msg_hdr.msg_namelen,
+                                        bufs[r], bread, now );
+                        }
+                    }
+                }
+#else
                 struct sockaddr_storage udp_sender_sock;
                 socklen_t udp_sender_len = sizeof(udp_sender_sock);
 
@@ -2270,9 +2306,42 @@ static int run_loop( n2n_sn_t * sss )
                     process_udp( sss, (struct sockaddr*) &udp_sender_sock, udp_sender_len,
                                 pktbuf, bread, now );
                 }
+#endif
             }
 
             if (sss->sock6 != -1 && FD_ISSET(sss->sock6, &socket_mask)) {
+#if defined(__linux__)
+                #define SN_RECVMMSG6_VLEN 16
+                static struct mmsghdr msgs6[SN_RECVMMSG6_VLEN];
+                static struct iovec iovecs6[SN_RECVMMSG6_VLEN];
+                static uint8_t bufs6[SN_RECVMMSG6_VLEN][N2N_SN_PKTBUF_SIZE];
+                static struct sockaddr_storage sender_socks6[SN_RECVMMSG6_VLEN];
+                static int initialized6 = 0;
+
+                if (!initialized6) {
+                    memset(msgs6, 0, sizeof(msgs6));
+                    for (int i = 0; i < SN_RECVMMSG6_VLEN; i++) {
+                        iovecs6[i].iov_base = bufs6[i];
+                        iovecs6[i].iov_len = N2N_SN_PKTBUF_SIZE;
+                        msgs6[i].msg_hdr.msg_iov = &iovecs6[i];
+                        msgs6[i].msg_hdr.msg_iovlen = 1;
+                        msgs6[i].msg_hdr.msg_name = &sender_socks6[i];
+                        msgs6[i].msg_hdr.msg_namelen = sizeof(sender_socks6[i]);
+                    }
+                    initialized6 = 1;
+                }
+
+                int retval = recvmmsg(sss->sock6, msgs6, SN_RECVMMSG6_VLEN, MSG_DONTWAIT, NULL);
+                if (retval > 0) {
+                    for (int r = 0; r < retval; r++) {
+                        ssize_t bread = msgs6[r].msg_len;
+                        if (bread > 0) {
+                            process_udp( sss, (struct sockaddr*) &sender_socks6[r], msgs6[r].msg_hdr.msg_namelen,
+                                        bufs6[r], bread, now );
+                        }
+                    }
+                }
+#else
                 struct sockaddr_storage udp6_sender_sock;
                 socklen_t udp6_sender_len = sizeof(udp6_sender_sock);
 
@@ -2283,6 +2352,7 @@ static int run_loop( n2n_sn_t * sss )
                     process_udp( sss, (struct sockaddr*) &udp6_sender_sock, udp6_sender_len,
                                 pktbuf, bread, now );
                 }
+#endif
             }
 
             if (FD_ISSET(sss->mgmt_sock, &socket_mask)) {
