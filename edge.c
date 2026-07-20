@@ -206,6 +206,7 @@ struct n2n_edge
 #ifdef _WIN32
     volatile int        keep_running;           /**< Set to 0 to stop tunReadThread */
 #endif
+    time_t              keepalive_max_interval; /**< 最大心跳保活检测间隔参数 */
 };
 
 #ifdef _WIN32
@@ -448,6 +449,7 @@ static int edge_init(n2n_edge_t * eee)
     eee->last_register_req = 0;
     eee->register_lifetime = 120;
     eee->last_p2p = 0;
+    eee->keepalive_max_interval = 30;
     eee->last_sup = 0;
     eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
     eee->sn_af = AF_UNSPEC;
@@ -755,7 +757,7 @@ static void help() {
     printf("\n");
 
     printf("Usage: edge [config_file] <options>\n");
-    printf("or: edge -a <tun IP address> -c <community> -k <encrypt key> -B <mode> -l <supernode host:port>\n");
+    printf("or: edge -a <tun IP address> -c <community> -k <encrypt key> -A <mode> -l <supernode host:port>\n");
     printf("or: edge -c <community> (default: -d n2nx -a 10.64.0.x -l ouno.eu.org:10084; no password, not secure, not recommended)\n");
     printf("\n");
 
@@ -766,24 +768,25 @@ static void help() {
 #endif
     printf("-a <mode:IPv4/prefixlen> | Set interface IPv4 address. For DHCP use '-r -a dhcp:0.0.0.0/0'\n");
     printf("                         : If not specified, auto-assigns 10.64.0.x from supernode\n");
-    printf("-A <IPv6>/<prefixlen>    | Set interface IPv6 address, only supported if IPv4 set to 'static'\n");
+    printf("-y <IPv6>/<prefixlen>    | Set interface IPv6 address, only supported if IPv4 set to 'static'\n");
     printf("-c <community>           | n2n community name the edge belongs to.\n");
-    printf("-B <mode>                | Encryption:");
-    printf(" B1 = disable, B2 = twofish(-k)");
+    printf("-A <mode>                | Encryption:");
+    printf(" A1 = disable, A2 = twofish(-k)");
     #ifdef N2N_HAVE_AES
-    printf(", B3 = AES-CBC(-k)");
+    printf(", A3 = AES-CBC(-k)");
     #endif
     #ifdef N2N_HAVE_CC20
-    printf(", B4 = ChaCha20(-k)");
+    printf(", A4 = ChaCha20(-k)");
     #endif
     printf("\n");
-    printf("                         : B5 = Speck(-k). '-B1' can also be used as '-B 1' (default: twofish)\n");
+    printf("                         : A5 = Speck(-k). '-A1' can also be used as '-A 1' (default: chacha20)\n");
     printf("-k <encrypt key>         | Encryption key (ASCII, max 32) - also N2N_KEY=<encrypt key>.\n");
     printf("-l <supernode host:port> | Supernode address Formats (default: ouno.eu.org:10084):\n");
     printf("                         : host:port  - Direct address (e.g. ouno.eu.org:10084)\n");
     printf("                         : host       - Query DNS TXT record for address (e.g. n2n.example.com)\n");
     printf("-4/-6                    | Resolve supernode DNS name as IPv4 or IPv6 (default: auto)\n");
     printf("-p <local port>          | Fixed local UDP port.\n");
+    printf("-i <interval>            | Set maximum keepalive interval in seconds (default: 30)\n");
 #ifndef _WIN32
     printf("-u <UID>                 | User ID (numeric) to use when privileges are dropped.\n");
     printf("-g <GID>                 | Group ID (numeric) to use when privileges are dropped.\n");
@@ -866,7 +869,7 @@ static void scan_subnet_arp(n2n_edge_t *eee) {
     for (uint32_t ip_h = subnet_start; ip_h <= subnet_end; ip_h++) {
         if (ip_h == my_ip_h) continue;
         arp_req.target_ip = htonl(ip_h);
-        tuntap_write(&(eee->device), (unsigned char*)&arp_req, sizeof(arp_req));
+        send_packet2net(eee, (unsigned char*)&arp_req, sizeof(arp_req));
     }
 }
 
@@ -1504,8 +1507,15 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
             if (scan->last_connection_type != 1) {
                 n2n_sock_str_t sockbuf;
                 n2n_sock_t *active_sock = (scan->sock.family == AF_INET) ? &scan->sock : &scan->sock6;
-                traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s at %s",
-                           PEER_ID(mac_tmp, scan), sock_to_cstr(sockbuf, active_sock));
+                char ip_buf[INET_ADDRSTRLEN] = "0.0.0.0";
+                if (scan->assigned_ip != 0) {
+                    struct in_addr a;
+                    a.s_addr = htonl(scan->assigned_ip);
+                    inet_ntop(AF_INET, &a, ip_buf, sizeof(ip_buf));
+                }
+                macstr_t mac_str;
+                traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s [IP=%s] at %s",
+                           macaddr_str(mac_str, scan->mac_addr), ip_buf, sock_to_cstr(sockbuf, active_sock));
                 scan->last_connection_type = 1;
             }
         } else if ( scan->punch_start_time != 0 &&
@@ -1590,8 +1600,14 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
         } else if ( scan->punch_failed )
         {
             if ( scan->punch_retry_count >= 3 ) {
-                prev = scan;
-                scan = scan->next;
+                struct peer_info *tmp = scan;
+                if ( prev ) prev->next = scan->next;
+                else eee->pending_peers = scan->next;
+                
+                tmp->next = eee->known_peers;
+                eee->known_peers = tmp;
+                
+                scan = tmp->next;
                 continue;
             }
             if ( (now - scan->punch_reset_time) > 10 )
@@ -1604,8 +1620,14 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                                    scan->punch_retry_count);
                         scan->last_connection_type = 1;
                     }
-                    prev = scan;
-                    scan = scan->next;
+                    struct peer_info *tmp = scan;
+                    if ( prev ) prev->next = scan->next;
+                    else eee->pending_peers = scan->next;
+                    
+                    tmp->next = eee->known_peers;
+                    eee->known_peers = tmp;
+                    
+                    scan = tmp->next;
                     continue;
                 }
                 scan->punch_failed = 0;
@@ -1644,11 +1666,6 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
     struct peer_info *prev = NULL;
     MACSTR_TMP(mac_tmp);
 
-    /* Skip keepalive entirely if there's recent direct P2P communication */
-    if (eee->last_p2p > 0 && (now - eee->last_p2p) < KEEPALIVE_IDLE_SECONDS) return;
-    /* Also skip if there's recent relay (supernode) communication */
-    if (eee->last_sup > 0 && (now - eee->last_sup) < KEEPALIVE_IDLE_SECONDS) return;
-
     while ( scan ) {
         struct peer_info *next = scan->next;
         time_t idle = now - scan->last_seen;
@@ -1677,25 +1694,48 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
         if ( scan->last_probe_sent == 0 ) {
             /* No probe sent yet: send one if idle too long */
             if ( idle >= scan->keepalive_interval ) {
-                n2n_common_t cmn;
-                n2n_PROBE_t probe;
-                uint8_t pktbuf[N2N_PKT_BUF_SIZE];
-                size_t idx = 0;
+                if ( scan->last_connection_type == 1 ) {
+                    /* PSP中继模式：通过中继发送单播 Gratuitous ARP 进行保活，防止 NAT 映射老化 */
+                    uint8_t arp[42];
+                    memset(arp, 0, sizeof(arp));
+                    memcpy(arp,   scan->mac_addr, 6);              /* dst: peer's MAC */
+                    memcpy(arp+6, eee->device.mac_addr, 6);        /* src: our MAC */
+                    arp[12] = 0x08; arp[13] = 0x06;               /* EtherType: ARP */
+                    arp[14] = 0x00; arp[15] = 0x01;               /* HW type: Ethernet */
+                    arp[16] = 0x08; arp[17] = 0x00;               /* Protocol: IPv4 */
+                    arp[18] = 6;    arp[19] = 4;                  /* HW size, Proto size */
+                    arp[20] = 0x00; arp[21] = 0x02;               /* Opcode: Reply (gratuitous) */
+                    memcpy(arp+22, eee->device.mac_addr, 6);       /* sender MAC: ours */
+                    memcpy(arp+28, &eee->device.ip_addr, 4);       /* sender IP: ours */
+                    memcpy(arp+32, scan->mac_addr, 6);             /* target MAC: peer */
+                    memcpy(arp+38, &eee->device.ip_addr, 4);       /* target IP: ours (gratuitous) */
+                    
+                    send_packet2net(eee, arp, sizeof(arp));
+                    scan->last_probe_sent = now;
+                    traceEvent(TRACE_INFO, "Keepalive: Sent PSP relay GARP probe to %s (idle %lds)",
+                               macaddr_str(mac_tmp, scan->mac_addr), (long)idle);
+                } else {
+                    /* P2P直连模式：发送 PROBE 包 */
+                    n2n_common_t cmn;
+                    n2n_PROBE_t probe;
+                    uint8_t pktbuf[N2N_PKT_BUF_SIZE];
+                    size_t idx = 0;
 
-                memset(&cmn, 0, sizeof(cmn));
-                cmn.ttl = N2N_DEFAULT_TTL;
-                cmn.pc  = n2n_probe;
-                cmn.flags = 0;
-                memcpy(cmn.community, eee->community_name, N2N_COMMUNITY_SIZE);
-                memcpy(probe.srcMac, eee->device.mac_addr, N2N_MAC_SIZE);
-                memcpy(probe.dstMac, scan->mac_addr, N2N_MAC_SIZE);
+                    memset(&cmn, 0, sizeof(cmn));
+                    cmn.ttl = N2N_DEFAULT_TTL;
+                    cmn.pc  = n2n_probe;
+                    cmn.flags = 0;
+                    memcpy(cmn.community, eee->community_name, N2N_COMMUNITY_SIZE);
+                    memcpy(probe.srcMac, eee->device.mac_addr, N2N_MAC_SIZE);
+                    memcpy(probe.dstMac, scan->mac_addr, N2N_MAC_SIZE);
 
-                encode_PROBE(pktbuf, &idx, &cmn, &probe);
-                sendto_sock(sock_for_dest(eee, keepalive_addr), pktbuf, idx, keepalive_addr);
+                    encode_PROBE(pktbuf, &idx, &cmn, &probe);
+                    sendto_sock(sock_for_dest(eee, keepalive_addr), pktbuf, idx, keepalive_addr);
 
-                scan->last_probe_sent = now;
-                traceEvent(TRACE_INFO, "Keepalive PROBE sent to %s (idle %lds, interval %lds)",
-                           macaddr_str(mac_tmp, scan->mac_addr), (long)idle, (long)scan->keepalive_interval);
+                    scan->last_probe_sent = now;
+                    traceEvent(TRACE_INFO, "Keepalive PROBE sent to %s (idle %lds, interval %lds)",
+                               macaddr_str(mac_tmp, scan->mac_addr), (long)idle, (long)scan->keepalive_interval);
+                }
             }
         } else {
             /* Probe already sent: check if reply came back */
@@ -1811,7 +1851,7 @@ struct peer_info * try_send_register( n2n_edge_t * eee,
         scan->last_query_sent = n2n_now();
         send_query_peer(eee, mac); /* 新建节点时，主动向 Supernode 查询其详情（包含协议版本和操作系统系统） */
 
-        traceEvent(TRACE_NORMAL, "[P2P Punch] Found new peer physical node: MAC=%s, WAN=%s",
+        traceEvent(TRACE_DEBUG, "[P2P Punch] Found new peer physical node: MAC=%s, WAN=%s",
                    macaddr_str(mac_buf, mac), sock_to_cstr(sockbuf, peer));
 
         /* Send REGISTER directly to peer (punch hole) and also via supernode */
@@ -2021,8 +2061,14 @@ void set_peer_operational( n2n_edge_t * eee,
         if (scan->last_connection_type != 2 || sock_equal(&scan->last_conn_sock, peer) != 0) {
             char mac_buf[18];
             n2n_sock_str_t sockbuf;
-            traceEvent( TRACE_NORMAL, "P2P direct with %s at %s",
-                        PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ) );
+            char ip_buf[INET_ADDRSTRLEN] = "0.0.0.0";
+            if (scan->assigned_ip != 0) {
+                struct in_addr a;
+                a.s_addr = htonl(scan->assigned_ip);
+                inet_ntop(AF_INET, &a, ip_buf, sizeof(ip_buf));
+            }
+            traceEvent( TRACE_NORMAL, "P2P direct with %s [IP=%s] at %s",
+                        macaddr_str( mac_buf, scan->mac_addr ), ip_buf, sock_to_cstr( sockbuf, peer ) );
             scan->last_connection_type = 2;
             scan->last_conn_sock = *peer;
         }
@@ -2069,8 +2115,14 @@ void set_peer_operational( n2n_edge_t * eee,
                 memset(&scan->sock6, 0, sizeof(n2n_sock_t));  /* Clear IPv6 completely */
                 scan->last_seen = n2n_now();
                 
-                traceEvent( TRACE_NORMAL, "P2P upgraded to IPv4 for %s at %s (was IPv6)",
-                            PEER_ID(mac_buf, scan),
+                char ip_buf[INET_ADDRSTRLEN] = "0.0.0.0";
+                if (scan->assigned_ip != 0) {
+                    struct in_addr a;
+                    a.s_addr = htonl(scan->assigned_ip);
+                    inet_ntop(AF_INET, &a, ip_buf, sizeof(ip_buf));
+                }
+                traceEvent( TRACE_NORMAL, "P2P upgraded to IPv4 for %s [IP=%s] at %s (was IPv6)",
+                            macaddr_str( mac_buf, scan->mac_addr ), ip_buf,
                             sock_to_cstr( sockbuf, peer ) );
                 
                 /* Send REGISTER to confirm new address */
@@ -2378,6 +2430,7 @@ static const struct option long_options[] = {
   { "help"   ,         no_argument,       NULL, 'h' },
   { "verbose",         no_argument,       NULL, 'v' },
   { "socks5",          required_argument, NULL, 'S' },
+  { "keepalive-max-interval", required_argument, NULL, 'i' },
   { NULL,              0,                 NULL,  0  }
 };
 
@@ -2411,6 +2464,11 @@ static int send_PACKET( n2n_edge_t * eee,
     if ( !dest && !is_multi_broadcast(dstMac) )
     {
         time_t now = n2n_now();
+        if (eee->next_reg_time > now) {
+            eee->next_reg_time = 0;
+            eee->consecutive_reg_failures = 0;
+            traceEvent(TRACE_NORMAL, "Relaying packet: clearing registration backoff state to trigger re-registration");
+        }
         PEERS_LOCK(eee);
         struct peer_info *p = find_peer_by_mac(eee->pending_peers, dstMac);
         if ( !p ) p = find_peer_by_mac(eee->known_peers, dstMac);
@@ -2759,6 +2817,10 @@ static int handle_PACKET( n2n_edge_t * eee,
             }
         } else {
             scan->last_seen = now;
+            if (scan->last_connection_type == 1) {
+                scan->last_probe_sent = 0;
+                scan->keepalive_fails = 0;
+            }
         }
     }
     PEERS_UNLOCK(eee);
@@ -2802,7 +2864,7 @@ static int handle_PACKET( n2n_edge_t * eee,
                         n2n_sock_str_t sockbuf;
                         struct in_addr vip;
                         vip.s_addr = htonl(sp->assigned_ip);
-                        traceEvent(TRACE_NORMAL, "[P2P Punch] Sniffed peer virtual IP: MAC=%s, Virtual IP=%s, WAN=%s",
+                        traceEvent(TRACE_DEBUG, "[P2P Punch] Sniffed peer virtual IP: MAC=%s, Virtual IP=%s, WAN=%s",
                                    macaddr_str(mac_buf, sp->mac_addr), inet_ntoa(vip), sock_to_cstr(sockbuf, &sp->sock));
                     }
                     PEERS_UNLOCK(eee);
@@ -3344,13 +3406,13 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
                 kp->last_probe_sent = 0;
                 kp->keepalive_fails = 0;
 
-                /* 顺利收到心跳应答，增加成功计数，逐步翻倍延长心跳间隔（最高60秒） */
+                /* 顺利收到心跳应答，增加成功计数，逐步翻倍延长心跳间隔 */
                 kp->keepalive_success_count++;
                 if (kp->keepalive_success_count >= 3) {
                     if (kp->keepalive_interval < KEEPALIVE_IDLE_SECONDS) {
                         kp->keepalive_interval = KEEPALIVE_IDLE_SECONDS;
                     }
-                    kp->keepalive_interval = (kp->keepalive_interval * 2 > 60) ? 60 : (kp->keepalive_interval * 2);
+                    kp->keepalive_interval = (kp->keepalive_interval * 2 > eee->keepalive_max_interval) ? eee->keepalive_max_interval : (kp->keepalive_interval * 2);
                     kp->keepalive_success_count = 0;
                     traceEvent(TRACE_INFO, "Keepalive interval for %s extended to %ld seconds",
                                macaddr_str(mac_buf1, kp->mac_addr), (long)kp->keepalive_interval);
@@ -4556,7 +4618,7 @@ int main(int argc, char* argv[])
     int     mtu = DEFAULT_MTU;
     int     got_s = 0;
     struct tuntap_config tuntap_config;
-    int encrypt_mode = 2;
+    int encrypt_mode = 4;
 
 #ifndef _WIN32
     uid_t   userid = 0;
@@ -4660,7 +4722,7 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
     optarg = NULL;
     while((opt = getopt_long(argc,
         argv,
-        "46K:k:a:A:bc:Eu:g:m:M:d:l:p:fvhrt:R:B:S:", long_options, NULL
+        "46K:k:a:y:bc:Eu:g:m:M:d:l:p:fvhrt:R:A:S:i:", long_options, NULL
     )) != EOF) {
         switch (opt) {
         case '4':
@@ -4669,25 +4731,8 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
         case '6':
             eee.sn_af = AF_INET6;
         break;
-        case 'B':
-            if (!optarg || strlen(optarg) == 0) {
-                fprintf(stderr, "Error: Invalid -B option format. Use -B3 or -B 3\n");
-                exit(1);
-            }
-            for (int i = 0; optarg[i]; i++) {
-                if (!isdigit(optarg[i])) {
-                    fprintf(stderr, "Error: Invalid -B option format. Use -B3 or -B 3\n");
-                    exit(1);
-                }
-            }
-            encrypt_mode = atoi(optarg);
-            if (encrypt_mode < 1 || encrypt_mode > 5) {
-                fprintf(stderr, "Error: Invalid encryption mode. Use B1-B5\n");
-                exit(1);
-            }
-            break;
         case'K':
-            fprintf(stderr, "Error: -K (keyfile) is no longer supported. Use -k with -B3/-B4/-B5.\n");
+            fprintf(stderr, "Error: -K (keyfile) is no longer supported. Use -k with -A3/-A4/-A5.\n");
             exit(1);
         case 'a': /* IP address and mode of TUNTAP interface */
             if (optarg && strlen(optarg) > 0) {
@@ -4700,8 +4745,32 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
                 ip_prefixlen = 24;
             }
             break;
-        case 'A': /* IP address and mode of TUNTAP interface */
+        case 'A': /* Encryption mode */
+            if (!optarg || strlen(optarg) == 0) {
+                fprintf(stderr, "Error: Invalid -A option format. Use -A4 or -A 4\n");
+                exit(1);
+            }
+            {
+                int mode_val = 0;
+                if (optarg[0] == 'A' || optarg[0] == 'a') {
+                    mode_val = atoi(optarg + 1);
+                } else {
+                    mode_val = atoi(optarg);
+                }
+                if (mode_val < 1 || mode_val > 5) {
+                    fprintf(stderr, "Error: Invalid encryption mode. Use A1-A5\n");
+                    exit(1);
+                }
+                encrypt_mode = mode_val;
+            }
+            break;
+        case 'y': /* IP address and mode of TUNTAP interface (IPv6) */
             scan_address6(ip6_addr, INET6_ADDRSTRLEN, &ip6_prefixlen, optarg );
+            break;
+        case 'i': /* keepalive max interval */
+            eee.keepalive_max_interval = atoi(optarg);
+            if (eee.keepalive_max_interval < 5) eee.keepalive_max_interval = 5;
+            traceEvent(TRACE_NORMAL, "Keepalive: Configured max interval to %ld seconds", (long)eee.keepalive_max_interval);
             break;
         case 'c': /* community as a string */
             memset( eee.community_name, 0, N2N_COMMUNITY_SIZE );
