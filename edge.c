@@ -2891,6 +2891,9 @@ static int handle_PACKET( n2n_edge_t * eee,
 }
 
 static void query_mgmt_port(int port) {
+#ifndef INVALID_SOCKET
+#define INVALID_SOCKET (-1)
+#endif
     SOCKET fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (fd == INVALID_SOCKET) {
         fprintf(stderr, "Failed to create socket\n");
