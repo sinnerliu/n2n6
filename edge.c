@@ -2787,7 +2787,7 @@ static int handle_PACKET( n2n_edge_t * eee,
          * 需要移回 pending_peers 进行重新打洞（中转保底：后台重新打洞）。
          * 如果直连通道在 10 秒内仍有通信（包括直连刚成功的情况），则这只是网络延迟中转包，忽略之。 */
         int need_repunch = 0;
-        if (scan->direct_seen > 0 && (now - scan->direct_seen) > 10) {
+        if (scan->last_connection_type != 1 && scan->direct_seen > 0 && (now - scan->direct_seen) > 10) {
             need_repunch = 1;
         }
 
@@ -3539,7 +3539,16 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
                         }
                     }
 
-                    if (!addr_changed) {
+                    if (!addr_changed || known->last_connection_type == 1) {
+                        if (addr_changed) {
+                            if (pi.sockets[0].family == AF_INET) {
+                                known->sock = pi.sockets[0];
+                                known->sockets[0] = pi.sockets[0];
+                            }
+                            if (pi.sock6.family == AF_INET6) {
+                                known->sock6 = pi.sock6;
+                            }
+                        }
                         if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
                             pi.sockets[1].family != 0 && pi.sockets[1].port != 0) {
                             known->sockets[1] = pi.sockets[1];
