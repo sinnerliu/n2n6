@@ -2901,14 +2901,26 @@ static void query_mgmt_port(int port) {
     }
 
 #ifdef _WIN32
-    DWORD tv = 200; /* 200ms超时 */
+    DWORD tv = 1000; /* 1000ms超时 */
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
 #else
     struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 200000; /* 200ms超时 */
+    tv.tv_sec = 1;
+    tv.tv_usec = 0; /* 1000ms超时 */
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
+
+    /* 显式绑定到 127.0.0.1，以确保源 IP 必定是 Loopback 地址，从而能通过 edge 接收端的 localhost 安全验证 */
+    struct sockaddr_in local_bind;
+    memset(&local_bind, 0, sizeof(local_bind));
+    local_bind.sin_family = AF_INET;
+    local_bind.sin_port = htons(0);
+    local_bind.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(fd, (struct sockaddr*)&local_bind, sizeof(local_bind)) < 0) {
+        fprintf(stderr, "Failed to bind to localhost loopback\n");
+        closesocket(fd);
+        exit(1);
+    }
 
     struct sockaddr_in target;
     memset(&target, 0, sizeof(target));
