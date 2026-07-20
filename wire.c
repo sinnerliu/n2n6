@@ -294,12 +294,14 @@ size_t decode_REGISTER( n2n_REGISTER_t * reg,
     } else {
         strcpy(reg->version, "unknown");
     }
+    reg->version[sizeof(reg->version) - 1] = '\0';
 
     if (*rem >= sizeof(reg->os_name)) {
         retval += decode_buf( reg->os_name, sizeof(reg->os_name), base, rem, idx );
     } else {
         strcpy(reg->os_name, "unknown");
     }
+    reg->os_name[sizeof(reg->os_name) - 1] = '\0';
 
     return retval;
 }
@@ -629,9 +631,9 @@ size_t encode_PEER_INFO( uint8_t * base, size_t * idx,
 }
 
 size_t decode_PEER_INFO( n2n_PEER_INFO_t * pkt,
-                         const n2n_common_t * cmn,
-                         const uint8_t * base,
-                         size_t * rem, size_t * idx )
+                          const n2n_common_t * cmn,
+                          const uint8_t * base,
+                          size_t * rem, size_t * idx )
 {
     size_t retval = 0;
     memset( pkt, 0, sizeof(*pkt) );
@@ -645,8 +647,10 @@ size_t decode_PEER_INFO( n2n_PEER_INFO_t * pkt,
     /* version and os_name: optional, appended by new supernodes */
     if ( *rem >= sizeof(pkt->version) )
         retval += decode_buf( pkt->version, sizeof(pkt->version), base, rem, idx );
+    pkt->version[sizeof(pkt->version) - 1] = '\0';
     if ( *rem >= sizeof(pkt->os_name) )
         retval += decode_buf( pkt->os_name, sizeof(pkt->os_name), base, rem, idx );
+    pkt->os_name[sizeof(pkt->os_name) - 1] = '\0';
     return retval;
 }
 
