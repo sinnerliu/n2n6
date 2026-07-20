@@ -1601,6 +1601,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
         } else if ( scan->punch_failed )
         {
             if ( scan->punch_retry_count >= 3 ) {
+                struct peer_info *next_peer = scan->next;
                 struct peer_info *tmp = scan;
                 if ( prev ) prev->next = scan->next;
                 else eee->pending_peers = scan->next;
@@ -1608,7 +1609,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                 tmp->next = eee->known_peers;
                 eee->known_peers = tmp;
                 
-                scan = tmp->next;
+                scan = next_peer;
                 continue;
             }
             if ( (now - scan->punch_reset_time) > 10 )
@@ -1621,6 +1622,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                                    scan->punch_retry_count);
                         scan->last_connection_type = 1;
                     }
+                    struct peer_info *next_peer = scan->next;
                     struct peer_info *tmp = scan;
                     if ( prev ) prev->next = scan->next;
                     else eee->pending_peers = scan->next;
@@ -1628,7 +1630,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                     tmp->next = eee->known_peers;
                     eee->known_peers = tmp;
                     
-                    scan = tmp->next;
+                    scan = next_peer;
                     continue;
                 }
                 scan->punch_failed = 0;
