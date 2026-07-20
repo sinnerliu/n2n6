@@ -787,6 +787,7 @@ static void help() {
     printf("-4/-6                    | Resolve supernode DNS name as IPv4 or IPv6 (default: auto)\n");
     printf("-p <local port>          | Fixed local UDP port.\n");
     printf("-i <interval>            | Set maximum keepalive interval in seconds (default: 30)\n");
+    printf("-Q <port>                | Query management port (for standalone use). (default: 5664)\n");
 #ifndef _WIN32
     printf("-u <UID>                 | User ID (numeric) to use when privileges are dropped.\n");
     printf("-g <GID>                 | Group ID (numeric) to use when privileges are dropped.\n");
@@ -2431,6 +2432,7 @@ static const struct option long_options[] = {
   { "verbose",         no_argument,       NULL, 'v' },
   { "socks5",          required_argument, NULL, 'S' },
   { "keepalive-max-interval", required_argument, NULL, 'i' },
+  { "query-mgmt",      optional_argument, NULL, 'Q' },
   { NULL,              0,                 NULL,  0  }
 };
 
@@ -2886,6 +2888,47 @@ static int handle_PACKET( n2n_edge_t * eee,
     }
 
     return retval;
+}
+
+static void query_mgmt_port(int port) {
+    SOCKET fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd == INVALID_SOCKET) {
+        fprintf(stderr, "Failed to create socket\n");
+        exit(1);
+    }
+
+#ifdef _WIN32
+    DWORD tv = 200; /* 200ms超时 */
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 200000; /* 200ms超时 */
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+
+    struct sockaddr_in target;
+    memset(&target, 0, sizeof(target));
+    target.sin_family = AF_INET;
+    target.sin_port = htons(port);
+    target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    char req = '\n';
+    if (sendto(fd, &req, 1, 0, (struct sockaddr*)&target, sizeof(target)) < 0) {
+        fprintf(stderr, "Failed to send query request to port %d\n", port);
+        closesocket(fd);
+        exit(1);
+    }
+
+    char buf[N2N_PKT_BUF_SIZE];
+    ssize_t len;
+    while ((len = recv(fd, buf, sizeof(buf) - 1, 0)) > 0) {
+        buf[len] = '\0';
+        printf("%s", buf);
+    }
+    
+    closesocket(fd);
+    exit(0);
 }
 
 /** Read a datagram from the management UDP socket and take appropriate
@@ -4619,6 +4662,7 @@ int main(int argc, char* argv[])
     int     got_s = 0;
     struct tuntap_config tuntap_config;
     int encrypt_mode = 4;
+    int query_port = 0;
 
 #ifndef _WIN32
     uid_t   userid = 0;
@@ -4722,7 +4766,7 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
     optarg = NULL;
     while((opt = getopt_long(argc,
         argv,
-        "46K:k:a:y:bc:Eu:g:m:M:d:l:p:fvhrt:R:A:S:i:", long_options, NULL
+        "46K:k:a:y:bc:Eu:g:m:M:d:l:p:fvhrt:R:A:S:i:Q::", long_options, NULL
     )) != EOF) {
         switch (opt) {
         case '4':
@@ -4771,6 +4815,19 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
             eee.keepalive_max_interval = atoi(optarg);
             if (eee.keepalive_max_interval < 5) eee.keepalive_max_interval = 5;
             traceEvent(TRACE_NORMAL, "Keepalive: Configured max interval to %ld seconds", (long)eee.keepalive_max_interval);
+            break;
+        case 'Q':
+            if (optarg) {
+                query_port = atoi(optarg);
+            } else {
+                /* 尝试从下一个参数读取，兼容 "-Q 5664" 的空格格式 */
+                if (optind < argc && argv[optind] && isdigit((unsigned char)argv[optind][0])) {
+                    query_port = atoi(argv[optind]);
+                    optind++;
+                } else {
+                    query_port = 5664;
+                }
+            }
             break;
         case 'c': /* community as a string */
             memset( eee.community_name, 0, N2N_COMMUNITY_SIZE );
@@ -4865,6 +4922,10 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
             break;
 
         } /* end switch */
+    }
+
+    if (query_port > 0) {
+        query_mgmt_port(query_port);
     }
 
     if (eee.sn_num == 0) {
