@@ -113,6 +113,7 @@ static int parseKeyLine( n2n_cipherspec_t * spec,
     token = strsep( &lp, DELIMITERS );
     if ( !token ) { goto error; }
     strncpy( (char *)spec->opaque, token, N2N_MAX_KEYSIZE );
+    spec->opaque[N2N_MAX_KEYSIZE - 1] = '\0';
     spec->opaque_size= (uint16_t) strlen( (char *)spec->opaque);
 
     return 0;

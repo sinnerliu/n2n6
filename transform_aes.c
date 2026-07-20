@@ -103,6 +103,10 @@ static ssize_t transop_decode_aes(n2n_trans_op_t *arg,
     uint8_t padding = assembly[len - 1] & 0xff;
     if (len < (int)padding) return 0;
     len -= padding;
+    if ((size_t)len > out_len) {
+        traceEvent(TRACE_ERROR, "decode_aes: outbuf too small (len=%d, out_len=%zu)", len, out_len);
+        return 0;
+    }
     memcpy(outbuf, assembly, len);
     return len;
 }

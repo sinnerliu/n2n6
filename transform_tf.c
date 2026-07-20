@@ -236,9 +236,17 @@ static ssize_t transop_decode_twofish( n2n_trans_op_t * arg,
                     /* Step over 4-byte random nonce value */
                     len -= TRANSOP_TF_NONCE_SIZE; /* size of ethernet packet */
 
-                    memcpy( outbuf,
-                            assembly + TRANSOP_TF_NONCE_SIZE,
-                            len );
+                    if (len > out_len)
+                    {
+                        traceEvent(TRACE_ERROR, "decode_twofish: outbuf too small (len=%zu, out_len=%zu)", len, out_len);
+                        len = 0;
+                    }
+                    else
+                    {
+                        memcpy( outbuf,
+                                assembly + TRANSOP_TF_NONCE_SIZE,
+                                len );
+                    }
                 }
                 else
                 {

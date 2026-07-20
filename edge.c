@@ -2285,8 +2285,10 @@ static void update_peer_address(n2n_edge_t * eee,
  */
 static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
 {
+    PEERS_LOCK(eee);
     if ( nowTime < eee->next_reg_time )
     {
+        PEERS_UNLOCK(eee);
         return; /* 在指数退避时间内，暂不发起注册 */
     }
 
@@ -2297,6 +2299,7 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
         send_register_super( eee, &(eee->supernode) );
         eee->sn_wait = 1;
         eee->last_register_req = nowTime;
+        PEERS_UNLOCK(eee);
         return;
     }
 
@@ -2306,6 +2309,7 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
     }
     else if ( nowTime < (time_t) (eee->last_register_req + eee->register_lifetime))
     {
+        PEERS_UNLOCK(eee);
         return; /* Too early */
     }
 
@@ -2354,6 +2358,7 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
     send_register_super( eee, &(eee->supernode) );
     eee->sn_wait=1;
     eee->last_register_req = nowTime;
+    PEERS_UNLOCK(eee);
 }
 
 /* @return 1 if destination is a peer, 0 if destination is supernode */
@@ -2474,12 +2479,12 @@ static int send_PACKET( n2n_edge_t * eee,
     if ( !dest && !is_multi_broadcast(dstMac) )
     {
         time_t now = n2n_now();
+        PEERS_LOCK(eee);
         if (eee->consecutive_reg_failures > 0 && eee->next_reg_time > now) {
             eee->next_reg_time = 0;
             eee->consecutive_reg_failures = 0;
             traceEvent(TRACE_NORMAL, "Relaying packet: clearing registration backoff state to trigger re-registration");
         }
-        PEERS_LOCK(eee);
         struct peer_info *p = find_peer_by_mac(eee->pending_peers, dstMac);
         if ( !p ) p = find_peer_by_mac(eee->known_peers, dstMac);
         int do_query;

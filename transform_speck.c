@@ -114,6 +114,10 @@ ssize_t transop_decode_speck(n2n_trans_op_t *arg,
     idx += N2N_SPECK_NONCE_SIZE;
 
     /* Decrypt data */
+    if ((in_len - idx) > out_len) {
+        traceEvent(TRACE_ERROR, "decode_speck: outbuf too small (len=%zu, out_len=%zu)", in_len - idx, out_len);
+        return -1;
+    }
 #ifdef SPECK_CTX_BYVAL
     speck_ctr(outbuf, inbuf + idx, in_len - idx, nonce, priv->ctx);
 #else

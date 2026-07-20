@@ -156,19 +156,34 @@ ssize_t decode_common( n2n_common_t * out,
 {
     size_t idx0=*idx;
     uint8_t dummy=0;
-    decode_uint8( &dummy, base, rem, idx );
+
+    if ( decode_uint8( &dummy, base, rem, idx ) == 0 )
+    {
+        return -1;
+    }
 
     if ( N2N_PKT_VERSION != dummy )
     {
         return -1;
     }
 
-    decode_uint8( &(out->ttl), base, rem, idx );
-    decode_uint16( &(out->flags), base, rem, idx );
+    if ( decode_uint8( &(out->ttl), base, rem, idx ) == 0 )
+    {
+        return -1;
+    }
+
+    if ( decode_uint16( &(out->flags), base, rem, idx ) == 0 )
+    {
+        return -1;
+    }
+
     out->pc = (n2n_pc_t) ( out->flags & N2N_FLAGS_TYPE_MASK );
     out->flags &= N2N_FLAGS_BITS_MASK;
 
-    decode_buf( out->community, N2N_COMMUNITY_SIZE, base, rem, idx );
+    if ( decode_buf( out->community, N2N_COMMUNITY_SIZE, base, rem, idx ) == 0 )
+    {
+        return -1;
+    }
 
     return ((ssize_t) (*idx)) - (ssize_t) idx0;
 }

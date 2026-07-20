@@ -76,6 +76,10 @@ static ssize_t transop_decode_cc20(n2n_trans_op_t *arg,
     decode_buf(dec_ivec, N2N_CC20_IVEC_SIZE, inbuf, &rem, &idx);
 
     int len = in_len - TRANSOP_CC20_PREAMBLE_SIZE;
+    if ((size_t)len > out_len) {
+        traceEvent(TRACE_ERROR, "decode_cc20: outbuf too small (len=%d, out_len=%zu)", len, out_len);
+        return 0;
+    }
     cc20_crypt(outbuf, inbuf + TRANSOP_CC20_PREAMBLE_SIZE, len, dec_ivec, priv->ctx);
 
     return len;
