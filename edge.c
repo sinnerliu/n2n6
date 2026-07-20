@@ -2466,7 +2466,7 @@ static int send_PACKET( n2n_edge_t * eee,
     if ( !dest && !is_multi_broadcast(dstMac) )
     {
         time_t now = n2n_now();
-        if (eee->next_reg_time > now) {
+        if (eee->consecutive_reg_failures > 0 && eee->next_reg_time > now) {
             eee->next_reg_time = 0;
             eee->consecutive_reg_failures = 0;
             traceEvent(TRACE_NORMAL, "Relaying packet: clearing registration backoff state to trigger re-registration");
