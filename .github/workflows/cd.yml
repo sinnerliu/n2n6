@@ -1,7 +1,7 @@
 name: Build N2N_IPV6
 
 on:
-#  push:
+  push:
   workflow_dispatch:
 
 concurrency:
@@ -62,7 +62,8 @@ jobs:
           ARCH_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f1)
           REST_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f2-)
           DATE=$(date +'%Y%m%d')
-          echo "ARTIFACT_NAME=n2n-v26-${REST_PART}-${ARCH_PART}-${DATE}-${SHORT_SHA}" >> $GITHUB_ENV
+          N2N_VER=$(grep -E 'set\(N2N_VERSION' CMakeLists.txt | cut -d' ' -f2 | tr -d ')')
+          echo "ARTIFACT_NAME=n2n-v${N2N_VER}-${REST_PART}-${ARCH_PART}-${DATE}-${SHORT_SHA}" >> $GITHUB_ENV
 
       - name: Setup MSVC environment
         if: runner.os == 'windows'
