@@ -10,7 +10,7 @@ if(ipo_supported)
 endif()
 
 # N2n information
-set(N2N_VERSION 2.3_5.6)
+set(N2N_VERSION 2.3_7.0)
 set(N2N_OSNAME ${CMAKE_SYSTEM_NAME})
 
 add_definitions(-DN2N_VERSION=\"${N2N_VERSION}\" -DN2N_OSNAME=\"${N2N_OSNAME}\")
