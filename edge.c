@@ -3093,8 +3093,12 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
 
     macstr_t mac;
     n2n_sock_str_t sockaddr;
-    struct peer_info* peer = eee->pending_peers;
+    struct peer_info* peer;
     int id = 1;
+
+    PEERS_LOCK(eee);
+
+    peer = eee->pending_peers;
     while(peer) {
         /* Skip if same virtual IP as local edge */
         if (peer->assigned_ip == ntohl(eee->device.ip_addr)) {
@@ -3123,6 +3127,40 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
                            os_name);
         sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
                (struct sockaddr*) &sender_sock, i);
+        peer = peer->next;
+    }
+
+    peer = eee->known_peers;
+    while(peer) {
+        /* Skip if same virtual IP as local edge */
+        if (peer->last_connection_type != 2) {
+            if (peer->assigned_ip == ntohl(eee->device.ip_addr)) {
+                peer = peer->next;
+                continue;
+            }
+            sock_to_cstr(sockaddr, &peer->sock);
+            const char *version = (peer->version[0] != '\0') ? peer->version : "unknown";
+            const char *os_name = (peer->os_name[0] != '\0') ? peer->os_name : "unknown";
+
+            /* Format virtual IP */
+            char virt_ip[16] = "-";
+            if (peer->assigned_ip != 0) {
+                struct in_addr addr;
+                addr.s_addr = htonl(peer->assigned_ip);
+                inet_ntop(AF_INET, &addr, virt_ip, sizeof(virt_ip));
+            }
+
+            msg_len = snprintf((char*)udp_buf, N2N_PKT_BUF_SIZE,
+                               " %2u  %-17s  %-15s  %-48s  %-7s  %s\n",
+                               id++,
+                               macaddr_str(mac, peer->mac_addr),
+                               virt_ip,
+                               sock_to_cstr(sockaddr, &peer->sock),
+                               version,
+                               os_name);
+            sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
+                   (struct sockaddr*) &sender_sock, i);
+        }
         peer = peer->next;
     }
 
@@ -3135,34 +3173,38 @@ static void readFromMgmtSocket(n2n_edge_t *eee, int *keep_running) {
     id = 1;
     while(peer) {
         /* Skip if same virtual IP as local edge */
-        if (peer->assigned_ip == ntohl(eee->device.ip_addr)) {
-            peer = peer->next;
-            continue;
-        }
-        sock_to_cstr(sockaddr, &peer->sock);
-        const char *version = (peer->version[0] != '\0') ? peer->version : "unknown";
-        const char *os_name = (peer->os_name[0] != '\0') ? peer->os_name : "unknown";
+        if (peer->last_connection_type == 2) {
+            if (peer->assigned_ip == ntohl(eee->device.ip_addr)) {
+                peer = peer->next;
+                continue;
+            }
+            sock_to_cstr(sockaddr, &peer->sock);
+            const char *version = (peer->version[0] != '\0') ? peer->version : "unknown";
+            const char *os_name = (peer->os_name[0] != '\0') ? peer->os_name : "unknown";
 
-        /* Format virtual IP */
-        char virt_ip[16] = "-";
-        if (peer->assigned_ip != 0) {
-            struct in_addr addr;
-            addr.s_addr = htonl(peer->assigned_ip);
-            inet_ntop(AF_INET, &addr, virt_ip, sizeof(virt_ip));
-        }
+            /* Format virtual IP */
+            char virt_ip[16] = "-";
+            if (peer->assigned_ip != 0) {
+                struct in_addr addr;
+                addr.s_addr = htonl(peer->assigned_ip);
+                inet_ntop(AF_INET, &addr, virt_ip, sizeof(virt_ip));
+            }
 
-        msg_len = snprintf((char*)udp_buf, N2N_PKT_BUF_SIZE,
-                           " %2u  %-17s  %-15s  %-48s  %-7s  %s\n",
-                           id++,
-                           macaddr_str(mac, peer->mac_addr),
-                           virt_ip,
-                           sock_to_cstr(sockaddr, &peer->sock),
-                           version,
-                           os_name);
-        sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
-               (struct sockaddr*) &sender_sock, i);
+            msg_len = snprintf((char*)udp_buf, N2N_PKT_BUF_SIZE,
+                               " %2u  %-17s  %-15s  %-48s  %-7s  %s\n",
+                               id++,
+                               macaddr_str(mac, peer->mac_addr),
+                               virt_ip,
+                               sock_to_cstr(sockaddr, &peer->sock),
+                               version,
+                               os_name);
+            sendto(eee->mgmt_sock, udp_buf, msg_len, 0/*flags*/,
+                   (struct sockaddr*) &sender_sock, i);
+        }
         peer = peer->next;
     }
+
+    PEERS_UNLOCK(eee);
 
     /* Send supernode info */
     const char *sn_support;
