@@ -1694,6 +1694,12 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
             scan->keepalive_interval = KEEPALIVE_IDLE_SECONDS;
         }
 
+        /* 对于中继节点，为了维持 NAT 映射的绝对稳定性，限制其保活间隔最高为 10 秒 */
+        time_t max_interval = (scan->last_connection_type == 1) ? 10 : eee->keepalive_max_interval;
+        if ( scan->keepalive_interval > max_interval ) {
+            scan->keepalive_interval = max_interval;
+        }
+
         if ( scan->last_probe_sent == 0 ) {
             /* No probe sent yet: send one if idle too long */
             if ( idle >= scan->keepalive_interval ) {
@@ -2381,8 +2387,8 @@ static int find_peer_destination(n2n_edge_t * eee,
                 break;
             }
 
-            /* If no direct P2P communication for 15s, fall back to relay */
-            if (scan->direct_seen > 0 && (now - scan->direct_seen) >= 15) {
+            /* If no direct P2P communication for 3s, fall back to relay */
+            if (scan->direct_seen > 0 && (now - scan->direct_seen) >= 3) {
                 traceEvent(TRACE_DEBUG, "find_peer_destination: direct_seen timeout, using relay");
                 break;
             }
@@ -3526,7 +3532,7 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
             if (!do_punch) {
                 if (known) {
                     int addr_changed = 0;
-                    if (known->direct_seen == 0 || (now - known->direct_seen) >= 15) {
+                    if (known->direct_seen == 0 || (now - known->direct_seen) >= 5) {
                         if (pi.sockets[0].family == AF_INET) {
                             if (known->sock.family != AF_INET ||
                                 sock_equal(&known->sock, &pi.sockets[0]) != 0) {
