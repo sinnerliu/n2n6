@@ -23,14 +23,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-pc-windows_static
+          - target: x86_64-windows_static
             os: windows-latest
             ARCH: x64
             MSVC_ARCH: x64
-          - target: x86_64-pc-windows
+          - target: x86_64-windows
             os: windows-latest
             ARCH: x64
             MSVC_ARCH: x64
+
+          - target: i686-windows_static
+            os: windows-latest
+            ARCH: x86
+            MSVC_ARCH: x86
+          - target: i686-windows
+            os: windows-latest
+            ARCH: x86
+            MSVC_ARCH: x86
 
           - target: aarch64-linux-musl_static
             os: ubuntu-latest
@@ -46,6 +55,58 @@ jobs:
             os: ubuntu-latest
             URL: x86_64-linux-musl
 
+          - target: i686-linux-musl_static
+            os: ubuntu-latest
+            URL: i686-linux-musl
+          - target: i686-linux-musl
+            os: ubuntu-latest
+            URL: i686-linux-musl
+
+          - target: armv7-linux-musleabihf_static
+            os: ubuntu-latest
+            URL: armv7l-linux-musleabihf
+          - target: armv7-linux-musleabihf
+            os: ubuntu-latest
+            URL: armv7l-linux-musleabihf
+
+          - target: armv7-linux-musleabi_static
+            os: ubuntu-latest
+            URL: armv7m-linux-musleabi
+          - target: armv7-linux-musleabi
+            os: ubuntu-latest
+            URL: armv7m-linux-musleabi
+
+          - target: arm-linux-musleabihf_static
+            os: ubuntu-latest
+            URL: arm-linux-musleabihf
+          - target: arm-linux-musleabihf
+            os: ubuntu-latest
+            URL: arm-linux-musleabihf
+
+          - target: arm-linux-musleabi_static
+            os: ubuntu-latest
+            URL: arm-linux-musleabi
+          - target: arm-linux-musleabi
+            os: ubuntu-latest
+            URL: arm-linux-musleabi
+
+          - target: mipsel-linux-musl_static
+            os: ubuntu-latest
+            URL: mipsel-linux-muslsf
+          - target: mipsel-linux-musl
+            os: ubuntu-latest
+            URL: mipsel-linux-muslsf
+
+          - target: mips-linux-musl_static
+            os: ubuntu-latest
+            URL: mips-linux-muslsf
+          - target: mips-linux-musl
+            os: ubuntu-latest
+            URL: mips-linux-muslsf
+
+          - target: x86_64-apple-darwin
+            os: macos-latest
+
     runs-on: ${{ matrix.os }}
     env:
       TARGET: ${{ matrix.TARGET }}
@@ -54,6 +115,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Generate Artifact Name
         shell: bash
@@ -75,6 +137,7 @@ jobs:
         if: runner.os == 'windows' && endsWith(matrix.TARGET, '_static')
         shell: pwsh
         run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
           mkdir build
           cd build
           cmake .. `
@@ -91,6 +154,7 @@ jobs:
         if: runner.os == 'windows' && !endsWith(matrix.TARGET, '_static')
         shell: pwsh
         run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
           mkdir build
           cd build
           cmake .. `
@@ -103,6 +167,10 @@ jobs:
           .\edge.exe -h || true
           .\supernode.exe -h || true
 
+      - name: Set timezone
+        if: runner.os == 'Linux'
+        run: sudo timedatectl set-timezone "Asia/Shanghai"
+
       - name: Download gcc
         if: runner.os == 'Linux'
         uses: lmq8267/dl-musl@main
@@ -111,15 +179,18 @@ jobs:
           static: true
           gccpath: /opt/musl_gcc
 
-      - name: Linux build (static)
-        if: runner.os == 'Linux' && endsWith(matrix.TARGET, '_static')
+      - name: Linux build
+        if: runner.os == 'Linux'
         run: |
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          mkdir -p build && cd build
+          LINKDIR="build"
+          rm -rf "$LINKDIR"
+          mkdir -p "$LINKDIR" && cd "$LINKDIR"
+          EXTRA=""
+          [ "${{ endsWith(matrix.TARGET, '_static') }}" = "true" ] && EXTRA="-static -static-libgcc"
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-O2 -ffunction-sections -fdata-sections -fno-strict-aliasing" \
-            -DCMAKE_EXE_LINKER_FLAGS="-static -Wl,--gc-sections -static-libgcc" \
+            -DCMAKE_EXE_LINKER_FLAGS="$EXTRA -Wl,--gc-sections" \
             -DCMAKE_C_COMPILER=${CC}
           make -j$(nproc)
           ./edge -h || true
@@ -128,22 +199,21 @@ jobs:
           $STRIP edge
           $STRIP supernode
 
-      - name: Linux build (dynamic)
-        if: runner.os == 'Linux' && !endsWith(matrix.TARGET, '_static')
+      - name: macOS build
+        if: runner.os == 'macOS'
         run: |
-          sudo timedatectl set-timezone "Asia/Shanghai"
+          rm -rf build
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-O2 -ffunction-sections -fdata-sections -fno-strict-aliasing" \
-            -DCMAKE_EXE_LINKER_FLAGS="-Wl,--gc-sections" \
-            -DCMAKE_C_COMPILER=${CC}
-          make -j$(nproc)
+            -DCMAKE_C_FLAGS="-O2 -ffunction-sections -fdata-sections" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-dead_strip"
+          make -j$(sysctl -n hw.logicalcpu)
           ./edge -h || true
           ls -la
           file edge
-          $STRIP edge
-          $STRIP supernode
+          strip edge
+          strip supernode
 
       - name: Upload
         uses: actions/upload-artifact@master
