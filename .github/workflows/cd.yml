@@ -114,12 +114,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Generate Platform Name
+      - name: Generate Artifact Name
         shell: bash
         run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          DATE=$(date +'%Y%m%d')
+          N2N_VER=$(grep -E 'set\(N2N_VERSION' CMakeLists.txt | cut -d' ' -f2 | tr -d ')')
           ARCH_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f1)
           REST_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f2-)
-          echo "PLATFORM_NAME=${REST_PART}-${ARCH_PART}" >> $GITHUB_ENV
+          PLATFORM_NAME="${REST_PART}-${ARCH_PART}"
+          SINGLE_NAME="n2n-v${N2N_VER}-${PLATFORM_NAME}-${DATE}-${SHORT_SHA}"
+          echo "PLATFORM_NAME=${PLATFORM_NAME}" >> $GITHUB_ENV
+          echo "SINGLE_NAME=${SINGLE_NAME}" >> $GITHUB_ENV
 
       - name: Setup MSVC environment
         if: runner.os == 'windows'
@@ -214,7 +220,7 @@ jobs:
         if: always()
         continue-on-error: true
         with:
-          name: ${{ env.PLATFORM_NAME }}
+          name: ${{ env.SINGLE_NAME }}
           path: |
             build/edge${{ runner.os == 'Windows' && '.exe' || '' }}
             build/supernode${{ runner.os == 'Windows' && '.exe' || '' }}
@@ -240,11 +246,25 @@ jobs:
         with:
           path: release_dir
 
+      - name: Create Zip Files for Each Architecture
+        shell: bash
+        run: |
+          mkdir -p dist
+          for dir in release_dir/*/; do
+            if [ -d "$dir" ]; then
+              arch_name=$(basename "$dir")
+              zip_file="dist/${arch_name}.zip"
+              echo "Packaging ${arch_name} into ${zip_file}..."
+              (cd "$dir" && zip -r "../../${zip_file}" .)
+            fi
+          done
+          ls -la dist/
+
       - name: Upload Unified Release Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.RELEASE_NAME }}
-          path: release_dir/
+          path: dist/
 
       - name: Delete workflow
         uses: Mattraks/delete-workflow-runs@v2
@@ -252,3 +272,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           retain_days: 2
           keep_minimum_runs: 0
+
