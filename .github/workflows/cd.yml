@@ -104,6 +104,9 @@ jobs:
             os: ubuntu-latest
             URL: mips-linux-muslsf
 
+          - target: x86_64-apple-darwin
+            os: macos-latest
+
     runs-on: ${{ matrix.os }}
     env:
       TARGET: ${{ matrix.TARGET }}
@@ -114,15 +117,12 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Generate Artifact Name
+      - name: Generate Platform Name
         shell: bash
         run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
           ARCH_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f1)
           REST_PART=$(echo "${{ matrix.TARGET }}" | cut -d'-' -f2-)
-          DATE=$(date +'%Y%m%d')
-          N2N_VER=$(grep -E 'set\(N2N_VERSION' CMakeLists.txt | cut -d' ' -f2 | tr -d ')')
-          echo "ARTIFACT_NAME=n2n-v${N2N_VER}-${REST_PART}-${ARCH_PART}-${DATE}-${SHORT_SHA}" >> $GITHUB_ENV
+          echo "PLATFORM_NAME=${REST_PART}-${ARCH_PART}" >> $GITHUB_ENV
 
       - name: Setup MSVC environment
         if: runner.os == 'windows'
@@ -212,15 +212,42 @@ jobs:
           strip edge
           strip supernode
 
-      - name: Upload
-        uses: actions/upload-artifact@master
+      - name: Upload Single Build Artifact
+        uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: ${{ env.PLATFORM_NAME }}
           path: |
             build/edge${{ runner.os == 'Windows' && '.exe' || '' }}
             build/supernode${{ runner.os == 'Windows' && '.exe' || '' }}
+
+  package:
+    name: Package All Artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Generate Release Name
+        shell: bash
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          DATE=$(date +'%Y%m%d')
+          N2N_VER=$(grep -E 'set\(N2N_VERSION' CMakeLists.txt | cut -d' ' -f2 | tr -d ')')
+          echo "RELEASE_NAME=n2n-v${N2N_VER}-${DATE}-${SHORT_SHA}" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_dir
+
+      - name: Upload Unified Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_NAME }}
+          path: release_dir/
 
       - name: Delete workflow
         uses: Mattraks/delete-workflow-runs@v2
