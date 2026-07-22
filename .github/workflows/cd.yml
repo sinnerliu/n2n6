@@ -104,9 +104,6 @@ jobs:
             os: ubuntu-latest
             URL: mips-linux-muslsf
 
-          - target: x86_64-apple-darwin
-            os: macos-latest
-
     runs-on: ${{ matrix.os }}
     env:
       TARGET: ${{ matrix.TARGET }}
