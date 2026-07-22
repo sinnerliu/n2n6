@@ -465,6 +465,8 @@ static int edge_init(n2n_edge_t * eee)
 
     pearson_hash_init();
 
+    strcpy(eee->supernode_version, "unknown");
+
     return(0);
 }
 
@@ -3843,7 +3845,12 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
                         eee->register_lifetime = min( eee->register_lifetime, REGISTER_SUPER_INTERVAL_MAX );
 
                         /* Store supernode version */
-                        strcpy(eee->supernode_version, n2n_sw_version);
+                        if (ra.version[0] != '\0') {
+                            strncpy(eee->supernode_version, ra.version, sizeof(eee->supernode_version) - 1);
+                            eee->supernode_version[sizeof(eee->supernode_version) - 1] = '\0';
+                        } else {
+                            strcpy(eee->supernode_version, "unknown (old)");
+                        }
 
                     } else {
                         /* Duplicate ACK from alt address family: just refresh last_sup */

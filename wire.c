@@ -449,6 +449,8 @@ size_t encode_REGISTER_SUPER_ACK( uint8_t * base,
     /* Append sn_caps after existing fields for backward compatibility.
      * Old edges will simply ignore this extra byte. */
     retval += encode_uint8( base, idx, reg->sn_caps );
+    retval += encode_buf( base, idx, (const uint8_t *)reg->version, sizeof(reg->version) );
+    retval += encode_buf( base, idx, (const uint8_t *)reg->os_name, sizeof(reg->os_name) );
     return retval;
 }
 
@@ -484,6 +486,19 @@ size_t decode_REGISTER_SUPER_ACK( n2n_REGISTER_SUPER_ACK_t * reg,
     {
         retval += decode_uint8( &(reg->sn_caps), base, rem, idx );
     }
+
+    /* version and os_name: optional, appended by new supernodes */
+    if ( *rem >= sizeof(reg->version) )
+    {
+        retval += decode_buf( (uint8_t *)reg->version, sizeof(reg->version), base, rem, idx );
+    }
+    reg->version[sizeof(reg->version) - 1] = '\0';
+
+    if ( *rem >= sizeof(reg->os_name) )
+    {
+        retval += decode_buf( (uint8_t *)reg->os_name, sizeof(reg->os_name), base, rem, idx );
+    }
+    reg->os_name[sizeof(reg->os_name) - 1] = '\0';
 
     return retval;
 }

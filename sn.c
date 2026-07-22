@@ -1879,6 +1879,11 @@ static int process_udp( n2n_sn_t * sss,
         if (sss->ipv4_available) ack.sn_caps |= N2N_SN_CAPS_IPV4;
         if (sss->ipv6_available) ack.sn_caps |= N2N_SN_CAPS_IPV6;
 
+        strncpy(ack.version, n2n_sw_version, sizeof(ack.version) - 1);
+        ack.version[sizeof(ack.version) - 1] = '\0';
+        strncpy(ack.os_name, n2n_sw_osName, sizeof(ack.os_name) - 1);
+        ack.os_name[sizeof(ack.os_name) - 1] = '\0';
+
         traceEvent( TRACE_DEBUG, "Rx REGISTER_SUPER for %s %s",
                     macaddr_str( mac_buf, reg.edgeMac ),
                     sock_to_cstr( sockbuf, &(ack.sock) ) );
