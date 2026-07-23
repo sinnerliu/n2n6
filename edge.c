@@ -3381,7 +3381,9 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
                     if ( reg.sock.family != 0 && reg.sock.port != 0 && eee->local_sock_ena )
                     {
                         n2n_sock_t lan_sock = reg.sock;
-                        lan_sock.port = orig_sender->port;
+                        if (lan_sock.port == 0) {
+                            lan_sock.port = orig_sender->port;
+                        }
                         traceEvent(TRACE_INFO, "Rx REGISTER with LAN addr %s - trying LAN direct",
                                    sock_to_cstr(sockbuf1, &lan_sock));
                         pending = try_send_register_lan(eee, from_supernode, reg.srcMac, orig_sender, &lan_sock);
@@ -3722,7 +3724,9 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
                               pi.sockets[1].family != 0 && pi.sockets[1].port != 0;
                 if (has_lan) {
                     n2n_sock_t lan_sock = pi.sockets[1];
-                    lan_sock.port = pi.sockets[0].port;
+                    if (lan_sock.port == 0) {
+                        lan_sock.port = pi.sockets[0].port;
+                    }
                     traceEvent(TRACE_INFO, "Trying LAN direct candidate: %s",
                                sock_to_cstr(sockbuf1, &lan_sock));
                     try_send_register_lan(eee, 1, pi.mac, &pi.sockets[0], &lan_sock);
