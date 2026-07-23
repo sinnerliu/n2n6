@@ -1511,7 +1511,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                 scan->psp_logged = 1;
             }
             if (scan->last_connection_type != 1) {
-                n2n_sock_str_t sockbuf;
+                n2n_sock_str_t sockbuf, wan_buf, lan_buf;
                 n2n_sock_t *active_sock = (scan->sock.family == AF_INET) ? &scan->sock : &scan->sock6;
                 char ip_buf[INET_ADDRSTRLEN] = "0.0.0.0";
                 if (scan->assigned_ip != 0) {
@@ -1520,8 +1520,12 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                     inet_ntop(AF_INET, &a, ip_buf, sizeof(ip_buf));
                 }
                 macstr_t mac_str;
-                traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s [IP=%s] at %s",
-                           macaddr_str(mac_str, scan->mac_addr), ip_buf, sock_to_cstr(sockbuf, active_sock));
+                const char *wan_str = (scan->sockets[0].family != 0) ? sock_to_cstr(wan_buf, &scan->sockets[0]) :
+                                      ((scan->sock.family != 0) ? sock_to_cstr(wan_buf, &scan->sock) : "N/A");
+                const char *lan_str = (scan->num_sockets >= 2 && scan->sockets[1].family != 0) ? sock_to_cstr(lan_buf, &scan->sockets[1]) : "N/A";
+                traceEvent(TRACE_NORMAL, "PsP (supernode relay) for %s [IP=%s] at %s (WAN=%s, LAN=%s)",
+                           macaddr_str(mac_str, scan->mac_addr), ip_buf, sock_to_cstr(sockbuf, active_sock),
+                           wan_str, lan_str);
                 scan->last_connection_type = 1;
             }
         } else if ( scan->punch_start_time != 0 &&
@@ -2076,15 +2080,19 @@ void set_peer_operational( n2n_edge_t * eee,
 
         if (scan->last_connection_type != 2 || sock_equal(&scan->last_conn_sock, peer) != 0) {
             char mac_buf[18];
-            n2n_sock_str_t sockbuf;
+            n2n_sock_str_t sockbuf, wan_buf, lan_buf;
             char ip_buf[INET_ADDRSTRLEN] = "0.0.0.0";
             if (scan->assigned_ip != 0) {
                 struct in_addr a;
                 a.s_addr = htonl(scan->assigned_ip);
                 inet_ntop(AF_INET, &a, ip_buf, sizeof(ip_buf));
             }
-            traceEvent( TRACE_NORMAL, "P2P direct with %s [IP=%s] at %s",
-                        macaddr_str( mac_buf, scan->mac_addr ), ip_buf, sock_to_cstr( sockbuf, peer ) );
+            const char *wan_str = (scan->sockets[0].family != 0) ? sock_to_cstr(wan_buf, &scan->sockets[0]) :
+                                  ((scan->sock.family != 0) ? sock_to_cstr(wan_buf, &scan->sock) : "N/A");
+            const char *lan_str = (scan->num_sockets >= 2 && scan->sockets[1].family != 0) ? sock_to_cstr(lan_buf, &scan->sockets[1]) : "N/A";
+            traceEvent( TRACE_NORMAL, "P2P direct with %s [IP=%s] at %s (WAN=%s, LAN=%s)",
+                        macaddr_str( mac_buf, scan->mac_addr ), ip_buf, sock_to_cstr( sockbuf, peer ),
+                        wan_str, lan_str );
             scan->last_connection_type = 2;
             scan->last_conn_sock = *peer;
         }
