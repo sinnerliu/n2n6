@@ -983,6 +983,9 @@ static int same_subnet(const n2n_sock_t *sock1, const n2n_sock_t *sock2) {
         /* Check /16 subnet */
         if ((addr1 & 0xFFFF0000) == (addr2 & 0xFFFF0000))
             return 1;
+        /* Check /8 subnet (e.g. 10.0.0.0/8 private network) */
+        if ((addr1 & 0xFF000000) == (addr2 & 0xFF000000) && (addr1 & 0xFF000000) == 0x0A000000)
+            return 1;
     }
     return 0;
 }
@@ -1884,7 +1887,9 @@ struct peer_info * try_send_register( n2n_edge_t * eee,
 
         if ( sock_equal(target_sock, peer) != 0 ) {
             *target_sock = *peer;
-            scan->num_sockets = 1;
+            if (scan->num_sockets < 1) {
+                scan->num_sockets = 1;
+            }
             scan->sockets[0] = *peer;
             scan->punch_start_time = 0;
             scan->punch_failed = 0;
@@ -3373,11 +3378,7 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
                 struct peer_info *scan = find_peer_by_mac(eee->known_peers, reg.srcMac);
                 if (NULL == scan) {
                     struct peer_info *pending = NULL;
-                    if ( reg.sock.family != 0 && reg.sock.port != 0 &&
-                         eee->local_sock_ena &&
-                         eee->my_public_sock.family == AF_INET &&
-                         sender.family == AF_INET &&
-                         memcmp(eee->my_public_sock.addr.v4, sender.addr.v4, IPV4_SIZE) == 0 )
+                    if ( reg.sock.family != 0 && reg.sock.port != 0 && eee->local_sock_ena )
                     {
                         n2n_sock_t lan_sock = reg.sock;
                         lan_sock.port = orig_sender->port;
@@ -3717,24 +3718,16 @@ static void handleIPSocketPacket( n2n_edge_t * eee, uint8_t * udp_buf, ssize_t r
             if (pending->sock6.family == AF_INET6 && eee->udp_sock6 != -1) {
                 try_send_register(eee, 1, pi.mac, &pending->sock6);
             } else {
-                int same_lan = (pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
-                                pi.sockets[1].family != 0 && pi.sockets[1].port != 0 &&
-                                eee->my_public_sock.family == AF_INET &&
-                                pi.sockets[0].family == AF_INET &&
-                                memcmp(eee->my_public_sock.addr.v4, pi.sockets[0].addr.v4, IPV4_SIZE) == 0;
-                if (same_lan) {
+                int has_lan = (pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
+                              pi.sockets[1].family != 0 && pi.sockets[1].port != 0;
+                if (has_lan) {
                     n2n_sock_t lan_sock = pi.sockets[1];
                     lan_sock.port = pi.sockets[0].port;
-                    traceEvent(TRACE_INFO, "Same public IP - trying LAN direct: %s",
+                    traceEvent(TRACE_INFO, "Trying LAN direct candidate: %s",
                                sock_to_cstr(sockbuf1, &lan_sock));
                     try_send_register_lan(eee, 1, pi.mac, &pi.sockets[0], &lan_sock);
                 } else {
                     try_send_register(eee, 1, pi.mac, &pending->sock);
-                    if (pending->num_sockets >= 2 && pending->sockets[1].family != 0 && pending->sockets[1].port != 0) {
-                        n2n_sock_t lan_sock = pending->sockets[1];
-                        lan_sock.port = pending->sockets[0].port;
-                        send_register(eee, &lan_sock);
-                    }
                 }
             }
 
