@@ -98,6 +98,13 @@ SOCKET open_socket(uint16_t local_port, int bind_any) {
     }
 #endif
 
+    /* 设置套接字发送与接收缓冲区为 1MB (1024 * 1024 字节) 以应对大文件传输爆发流量 */
+    {
+        int buf_size = 1024 * 1024;
+        setsockopt(sock_fd, SOL_SOCKET, SO_SNDBUF, (const char*)&buf_size, sizeof(buf_size));
+        setsockopt(sock_fd, SOL_SOCKET, SO_RCVBUF, (const char*)&buf_size, sizeof(buf_size));
+    }
+
     return sock_fd;
 }
 
@@ -126,6 +133,13 @@ SOCKET open_socket6(uint16_t local_port, int bind_any) {
         traceEvent(TRACE_ERROR, "Bind error [%s]\n", strerror(errno));
         closesocket(sock_fd);
         return -1;
+    }
+
+    /* 设置套接字发送与接收缓冲区为 1MB (1024 * 1024 字节) 以应对大文件传输爆发流量 */
+    {
+        int buf_size = 1024 * 1024;
+        setsockopt(sock_fd, SOL_SOCKET, SO_SNDBUF, (const char*)&buf_size, sizeof(buf_size));
+        setsockopt(sock_fd, SOL_SOCKET, SO_RCVBUF, (const char*)&buf_size, sizeof(buf_size));
     }
 
     return sock_fd;

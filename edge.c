@@ -897,7 +897,12 @@ static ssize_t sendto_sock( SOCKET fd, const void * buf, size_t len, const n2n_s
         char fallback[256];
         /* 10014 = WSAEFAULT: IPv6 socket sending to IPv4 address - silent */
         /* 10047 = WSAEAFNOSUPPORT: IPv4 socket sending to IPv6 address - silent */
-        if ( error != 10014 && error != 10047 ) {
+        /* 10035 = WSAEWOULDBLOCK: Non-blocking socket buffer full - debug trace */
+        if ( error == WSAEWOULDBLOCK ) {
+            const char *message = n2n_win32_format_error(error, fallback, sizeof(fallback));
+            traceEvent( TRACE_DEBUG, "sendto failed (%d) to %s: %s", error,
+                        sock_to_cstr(sockbuf, dest), message );
+        } else if ( error != 10014 && error != 10047 ) {
             const char *message = n2n_win32_format_error(error, fallback, sizeof(fallback));
             traceEvent( TRACE_ERROR, "sendto failed (%d) to %s: %s", error,
                         sock_to_cstr(sockbuf, dest), message );
