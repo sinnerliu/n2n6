@@ -22,6 +22,61 @@
 
 extern volatile int g_edge_running;
 
+/* SOCKS5 最大并发连接数限制 */
+#define SOCKS5_MAX_CONCURRENT 64
+static volatile int g_socks5_conn_count = 0;
+
+#ifdef _WIN32
+static SRWLOCK g_socks5_conn_lock = SRWLOCK_INIT;
+static int socks5_inc_conn(void) {
+    int ret = 0;
+    AcquireSRWLockExclusive(&g_socks5_conn_lock);
+    if (g_socks5_conn_count < SOCKS5_MAX_CONCURRENT) {
+        g_socks5_conn_count++;
+        ret = 1;
+    }
+    ReleaseSRWLockExclusive(&g_socks5_conn_lock);
+    return ret;
+}
+static void socks5_dec_conn(void) {
+    AcquireSRWLockExclusive(&g_socks5_conn_lock);
+    if (g_socks5_conn_count > 0) g_socks5_conn_count--;
+    ReleaseSRWLockExclusive(&g_socks5_conn_lock);
+}
+#else
+static pthread_mutex_t g_socks5_conn_lock = PTHREAD_MUTEX_INITIALIZER;
+static int socks5_inc_conn(void) {
+    int ret = 0;
+    pthread_mutex_lock(&g_socks5_conn_lock);
+    if (g_socks5_conn_count < SOCKS5_MAX_CONCURRENT) {
+        g_socks5_conn_count++;
+        ret = 1;
+    }
+    pthread_mutex_unlock(&g_socks5_conn_lock);
+    return ret;
+}
+static void socks5_dec_conn(void) {
+    pthread_mutex_lock(&g_socks5_conn_lock);
+    if (g_socks5_conn_count > 0) g_socks5_conn_count--;
+    pthread_mutex_unlock(&g_socks5_conn_lock);
+}
+#endif
+
+/* 统一设置套接字发送/接收超时（单位：秒） */
+static void set_socket_timeout(SOCKET fd, int seconds) {
+#ifdef _WIN32
+    DWORD tv = seconds * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+#endif
+}
+
 /* 设置套接字阻塞/非阻塞模式 */
 static void set_socket_nonblocking(SOCKET fd, int nonblocking) {
 #ifdef _WIN32
@@ -81,11 +136,8 @@ int start_socks5(uint32_t ip_addr, int port) {
         int is_port_in_use = (err == EADDRINUSE);
 #endif
         if (is_addr_not_avail) {
-            // 网卡 IP 分配初期（特别是 Windows DAD 冲突检测期间），绑定会返回此错误。
-            // 降低为 TRACE_DEBUG 级别以保持控制台清爽，静默重试。
             traceEvent(TRACE_DEBUG, "SOCKS5: Failed to bind to %s:%d (interface IP not ready yet, retrying...)", inet_ntoa(in_ip), port);
         } else if (is_port_in_use) {
-            // 端口确实被占用或未释放，提示警告，每 3 秒重试一次，不刷屏
             traceEvent(TRACE_WARNING, "SOCKS5: Failed to bind to %s:%d (port might be in use, retrying...)", inet_ntoa(in_ip), port);
         } else {
             traceEvent(TRACE_ERROR, "SOCKS5: Failed to bind to %s:%d (error=%d)", inet_ntoa(in_ip), port, err);
@@ -100,7 +152,6 @@ int start_socks5(uint32_t ip_addr, int port) {
         return -1;
     }
 
-    // 将 listen_fd 封装好传递给异步监听线程
     SOCKET *p_fd = malloc(sizeof(SOCKET));
     if (!p_fd) {
         traceEvent(TRACE_ERROR, "SOCKS5: Failed to allocate memory");
@@ -151,6 +202,12 @@ static void* socks5_listen_thread(void* lpArg)
     socklen_t client_len = sizeof(client_addr);
 
     while (g_edge_running) {
+#ifndef _WIN32
+        if (listen_fd >= FD_SETSIZE) {
+            traceEvent(TRACE_ERROR, "SOCKS5: Listen socket FD (%d) exceeds FD_SETSIZE (%d)", listen_fd, FD_SETSIZE);
+            break;
+        }
+#endif
         fd_set read_fds;
         struct timeval timeout;
         FD_ZERO(&read_fds);
@@ -175,8 +232,16 @@ static void* socks5_listen_thread(void* lpArg)
             continue;
         }
 
+        /* 检查并发连接数上限，保护系统资源 */
+        if (!socks5_inc_conn()) {
+            traceEvent(TRACE_WARNING, "SOCKS5: Reached max concurrent connection limit (%d), dropping connection", SOCKS5_MAX_CONCURRENT);
+            closesocket(client_fd);
+            continue;
+        }
+
         socks5_client_ctx_t *client_ctx = malloc(sizeof(socks5_client_ctx_t));
         if (!client_ctx) {
+            socks5_dec_conn();
             closesocket(client_fd);
             continue;
         }
@@ -187,6 +252,7 @@ static void* socks5_listen_thread(void* lpArg)
         if (hThread != NULL) {
             CloseHandle(hThread);
         } else {
+            socks5_dec_conn();
             closesocket(client_fd);
             free(client_ctx);
         }
@@ -195,6 +261,7 @@ static void* socks5_listen_thread(void* lpArg)
         if (pthread_create(&thread_id, NULL, socks5_client_thread, (void*)client_ctx) == 0) {
             pthread_detach(thread_id);
         } else {
+            socks5_dec_conn();
             closesocket(client_fd);
             free(client_ctx);
         }
@@ -219,6 +286,9 @@ static void* socks5_client_thread(void* lpArg)
     SOCKET remote_fd = INVALID_SOCKET;
     unsigned char buf[512];
     int r;
+
+    /* 为客户端套接字配置读写超时（10 秒），防止线程死锁 */
+    set_socket_timeout(client_fd, 10);
 
     // 1. 握手阶段 (Handshake)
     r = recv(client_fd, (char*)buf, 2, 0);
@@ -352,6 +422,14 @@ static void* socks5_client_thread(void* lpArg)
     }
 
     if (is_connecting) {
+#ifndef _WIN32
+        if (remote_fd >= FD_SETSIZE) {
+            traceEvent(TRACE_WARNING, "SOCKS5: remote_fd (%d) exceeds FD_SETSIZE (%d)", remote_fd, FD_SETSIZE);
+            unsigned char fail_conn[10] = {0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+            send(client_fd, (char*)fail_conn, 10, 0);
+            goto cleanup;
+        }
+#endif
         fd_set write_fds, err_fds;
         struct timeval tv;
         FD_ZERO(&write_fds);
@@ -396,6 +474,9 @@ static void* socks5_client_thread(void* lpArg)
     /* 连接成功后还原为阻塞模式，保证后续双向 select 转发的逻辑结构匹配 */
     set_socket_nonblocking(remote_fd, 0);
 
+    /* 为目标套接字配置读写超时（10 秒） */
+    set_socket_timeout(remote_fd, 10);
+
     /* 极致网络优化：禁用 Nagle 算法（启用 TCP_NODELAY），优化双向 TCP 缓冲区为 256KB */
     int flag_nodelay = 1;
     int buf_size = 262144; /* 256KB */
@@ -414,10 +495,16 @@ static void* socks5_client_thread(void* lpArg)
 
     // 4. 双向 TCP 数据中转
     fd_set fds;
-    char forward_buf[65536]; /* 扩容单次转发缓冲区至 64KB */
+    char forward_buf[16384]; /* 优化转发缓冲区为 16KB，兼顾性能与栈开销 */
     int running = 1;
 
     while (running && g_edge_running) {
+#ifndef _WIN32
+        if (client_fd >= FD_SETSIZE || remote_fd >= FD_SETSIZE) {
+            traceEvent(TRACE_WARNING, "SOCKS5: FD (%d or %d) exceeds FD_SETSIZE (%d), terminating transfer", client_fd, remote_fd, FD_SETSIZE);
+            break;
+        }
+#endif
         FD_ZERO(&fds);
         FD_SET(client_fd, &fds);
         FD_SET(remote_fd, &fds);
@@ -479,5 +566,6 @@ cleanup:
     shutdown(client_fd, SHUT_RDWR);
 #endif
     closesocket(client_fd);
+    socks5_dec_conn();
     return 0;
 }

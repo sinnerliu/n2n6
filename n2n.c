@@ -238,6 +238,12 @@ uint64_t n2n_now_ms(void) {
 #endif
 }
 
+#ifdef _WIN32
+static SRWLOCK g_trace_lock = SRWLOCK_INIT;
+#else
+static pthread_mutex_t g_trace_lock = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 #define N2N_TRACE_DATESIZE 32
 void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...) {
     va_list va_ap;
@@ -248,7 +254,15 @@ void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...) {
         char theDate[N2N_TRACE_DATESIZE];
         char *extra_msg = "";
         time_t theTime = time(NULL);
+        struct tm tm_buf;
+        struct tm *tm_info = NULL;
         int i;
+
+#ifdef _WIN32
+        AcquireSRWLockExclusive(&g_trace_lock);
+#else
+        pthread_mutex_lock(&g_trace_lock);
+#endif
 
         memset(buf, 0, sizeof(buf));
 
@@ -273,7 +287,7 @@ void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...) {
             if (useSystemd)
                 snprintf(out_buf, sizeof(out_buf), "%s%s", extra_msg, buf);
             else {
-                struct tm *tm_info = localtime(&theTime);
+                tm_info = localtime_r(&theTime, &tm_buf);
                 if (tm_info)
                     strftime(theDate, N2N_TRACE_DATESIZE, "%d/%b/%Y %H:%M:%S", tm_info);
                 else
@@ -287,7 +301,12 @@ void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...) {
 #else
         if (event_log == INVALID_HANDLE_VALUE) {
             /* running in the console */
-            strftime(theDate, N2N_TRACE_DATESIZE, "%d/%b/%Y %H:%M:%S", localtime(&theTime));
+            if (localtime_s(&tm_buf, &theTime) == 0) {
+                tm_info = &tm_buf;
+                strftime(theDate, N2N_TRACE_DATESIZE, "%d/%b/%Y %H:%M:%S", tm_info);
+            } else {
+                strncpy(theDate, "01/Jan/1970 00:00:00", N2N_TRACE_DATESIZE);
+            }
             for(i=(int)strlen(file)-1; i>0; i--) if(file[i] == '\\') { i++; break; };
             snprintf(out_buf, sizeof(out_buf), "%s [%s:%d] %s%s", theDate, &file[i], line, extra_msg, buf);
             printf("%s\n", out_buf);
@@ -310,6 +329,12 @@ void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...) {
 
             ReportEventW(event_log, level, 0, 0x40020000L, NULL, 2, 0, msg, NULL);
         }
+#endif
+
+#ifdef _WIN32
+        ReleaseSRWLockExclusive(&g_trace_lock);
+#else
+        pthread_mutex_unlock(&g_trace_lock);
 #endif
     }
 
