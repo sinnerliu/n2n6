@@ -583,7 +583,21 @@ void tuntap_close(struct tuntap_dev *tuntap) {
         tuntap->write_event = NULL;
     }
     DeleteCriticalSection(&tuntap->write_lock);
-    CloseHandle(tuntap->device_handle);
+
+    if (tuntap->device_handle != INVALID_HANDLE_VALUE) {
+        /* 取消挂起的 I/O，以唤醒可能卡在 ReadFile 上的 TUN 读取线程 */
+        CancelIo(tuntap->device_handle);
+        CloseHandle(tuntap->device_handle);
+        tuntap->device_handle = INVALID_HANDLE_VALUE;
+    }
+    if (tuntap->overlap_read.hEvent) {
+        CloseHandle(tuntap->overlap_read.hEvent);
+        tuntap->overlap_read.hEvent = NULL;
+    }
+    if (tuntap->overlap_write.hEvent) {
+        CloseHandle(tuntap->overlap_write.hEvent);
+        tuntap->overlap_write.hEvent = NULL;
+    }
 }
 
 int tuntap_restart( tuntap_dev* device ) {
@@ -607,7 +621,10 @@ int tuntap_restart( tuntap_dev* device ) {
         device->write_event = NULL;
     }
 
-    CloseHandle(device->device_handle);
+    if (device->device_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(device->device_handle);
+        device->device_handle = INVALID_HANDLE_VALUE;
+    }
 
     ResetEvent(device->overlap_write.hEvent);
     ResetEvent(device->overlap_read.hEvent);
