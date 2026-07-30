@@ -169,7 +169,10 @@ jobs:
 
       - name: Set timezone
         if: runner.os == 'Linux'
-        run: sudo timedatectl set-timezone "Asia/Shanghai"
+        run: |
+          sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime 2>/dev/null || \
+          ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime 2>/dev/null || \
+          true
 
       - name: Download gcc
         if: runner.os == 'Linux'
