@@ -1124,7 +1124,14 @@ static void set_localip( n2n_edge_t * eee )
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return;
 #endif
-    fill_sockaddr((struct sockaddr*)&sa_sn, sizeof(sa_sn), &eee->supernode);
+    if (eee->supernode.family == AF_INET) {
+        fill_sockaddr((struct sockaddr*)&sa_sn, sizeof(sa_sn), &eee->supernode);
+    } else {
+        memset(&sa_sn, 0, sizeof(sa_sn));
+        sa_sn.sin_family = AF_INET;
+        sa_sn.sin_port = htons(53);
+        sa_sn.sin_addr.s_addr = inet_addr("8.8.8.8");
+    }
     if (connect(fd, (struct sockaddr*)&sa_sn, sizeof(sa_sn)) == 0 &&
         getsockname(fd, (struct sockaddr*)&sa, &sa_len) == 0 &&
         sa.sin_family == AF_INET && sa.sin_addr.s_addr != 0)
