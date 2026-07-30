@@ -1273,24 +1273,39 @@ static int process_mgmt( n2n_sn_t * sss,
                 snprintf(virt_ip, sizeof(virt_ip), "%s", inet_ntoa(a));
 
             {
-                char wan_buf[72];
-                n2n_sock_str_t addr_str;
-                n2n_sock_t *primary_sock;
-
-                if (edge->connect_family == AF_INET6 && edge->sock6.family == AF_INET6) {
-                    primary_sock = &edge->sock6;
-                } else {
-                    primary_sock = &edge->sock;
+                n2n_sock_str_t sbuf, sbuf6;
+                char wan[64];
+                snprintf(wan, sizeof(wan), "%s", sock_to_cstr(sbuf, &edge->sock));
+                if (edge->sock6.family != 0) {
+                    const char *v6 = sock_to_cstr(sbuf6, &edge->sock6);
+                    size_t cur = strlen(wan);
+                    int budget = 47 - (int)cur - 1; /* 列宽限制 - 主要地址 - '/' 分隔符 */
+                    if (budget >= 6) {
+                        wan[cur++] = '/';
+                        if ((int)strlen(v6) <= budget) {
+                            strcpy(wan + cur, v6);
+                        } else {
+                            const char *port = strrchr(v6, ':');
+                            int port_len = port ? (int)strlen(port) : 0;
+                            int addr_max = budget - port_len;
+                            if (addr_max < 3) addr_max = 3;
+                            int w = 0;
+                            while (w < addr_max - 2 && v6[w]) { wan[cur + w] = v6[w]; w++; }
+                            wan[cur + w++] = '*';
+                            wan[cur + w++] = ']';
+                            if (port && w + port_len <= budget)
+                                memcpy(wan + cur + w, port, port_len + 1);
+                            else
+                                wan[cur + w] = '\0';
+                        }
+                    }
                 }
-                snprintf(wan_buf, sizeof(wan_buf), "%s",
-                         sock_to_cstr(addr_str, primary_sock));
-
                 ressize = snprintf(resbuf, N2N_SN_PKTBUF_SIZE,
                                    "  %2u  %-17s  %-15s  %-47s  %-7s  %s\n",
                                    id++,
                                    macaddr_str(mac_buf, edge->mac_addr),
                                    virt_ip,
-                                   wan_buf,
+                                   wan,
                                    version,
                                    os_name);
             }
@@ -1379,15 +1394,16 @@ static int process_mgmt( n2n_sn_t * sss,
     int days = uptime / 86400;
     int hours = (uptime % 86400) / 3600;
 
-    ressize += snprintf(resbuf + ressize, N2N_SN_PKTBUF_SIZE - ressize,
-                       "uptime %dd_%dh | edges %u | cmnts %u | reg_nak %u | errs %u | last_reg %lus ago | last_fwd %lus ago\n",
-                       days, hours,
-                       num_edges,
-                       num_communities,
-                       (unsigned int)sss->stats.reg_super_nak,
-                       (unsigned int)sss->stats.errors,
-                       (long unsigned int)(now - sss->stats.last_reg_super),
-                       (long unsigned int)(now - sss->stats.last_fwd));
+    if (ressize < N2N_SN_PKTBUF_SIZE)
+        ressize += snprintf(resbuf + ressize, N2N_SN_PKTBUF_SIZE - ressize,
+                           "uptime %dd_%dh | edges %u | cmnts %u | reg_nak %u | errs %u | last_reg %lus ago | last_fwd %lus ago\n",
+                           days, hours,
+                           num_edges,
+                           num_communities,
+                           (unsigned int)sss->stats.reg_super_nak,
+                           (unsigned int)sss->stats.errors,
+                           (long unsigned int)(now - sss->stats.last_reg_super),
+                           (long unsigned int)(now - sss->stats.last_fwd));
 
     const char* ip_support;
     if (sss->ipv4_available && sss->ipv6_available) {
@@ -1403,13 +1419,14 @@ static int process_mgmt( n2n_sn_t * sss,
     char time_buf[32];
     strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
 
-    ressize += snprintf(resbuf + ressize, N2N_SN_PKTBUF_SIZE - ressize,
-                       "broadcast %u | reg_sup %u | fwd %u | ip_support: %s | %s\n",
-                       (unsigned int) sss->stats.broadcast,
-                       (unsigned int)sss->stats.reg_super,
-                       (unsigned int) sss->stats.fwd,
-                       ip_support,
-                       time_buf);
+    if (ressize < N2N_SN_PKTBUF_SIZE)
+        ressize += snprintf(resbuf + ressize, N2N_SN_PKTBUF_SIZE - ressize,
+                           "broadcast %u | reg_sup %u | fwd %u | ip_support: %s | %s\n",
+                           (unsigned int) sss->stats.broadcast,
+                           (unsigned int)sss->stats.reg_super,
+                           (unsigned int) sss->stats.fwd,
+                           ip_support,
+                           time_buf);
 
     r = sendto(sss->mgmt_sock, resbuf, ressize, 0,
               sender_sock, sender_sock_len);
@@ -1419,22 +1436,23 @@ static int process_mgmt( n2n_sn_t * sss,
 }
 
 static int try_broadcast( n2n_sn_t * sss,
-                          const n2n_common_t * cmn,
-                          const n2n_mac_t srcMac,
-                          const uint8_t * pktbuf,
-                          size_t pktsize )
+                           const n2n_common_t * cmn,
+                           const n2n_mac_t srcMac,
+                           const uint8_t * pktbuf,
+                           size_t pktsize )
 {
     struct peer_info *  scan;
+    struct community_stats *cs = NULL;
+    int bc_count = 0;
     macstr_t            mac_buf;
     n2n_sock_str_t      sockbuf;
     time_t              now = time(NULL);
 
     traceEvent( TRACE_DEBUG, "try_broadcast" );
 
-    /* Rate limiting check for broadcast */
+    /* 广播限速检查 */
     if (sss->traffic_stats_enabled) {
-        struct community_stats *cs = get_community_stats(&sss->comm_stats,
-                                                          cmn->community, now);
+        cs = get_community_stats(&sss->comm_stats, cmn->community, now);
         if (cs) {
             if (cs->rate_limit_bps == 0 && cs->max_24h_bytes == 0)
                 apply_rules_to_stats(cs, sss->rate_rules);
@@ -1443,7 +1461,6 @@ static int try_broadcast( n2n_sn_t * sss,
                            cmn->community);
                 return 0;
             }
-            update_community_traffic(cs, pktsize, now);
         }
     }
 
@@ -1464,6 +1481,7 @@ static int try_broadcast( n2n_sn_t * sss,
                 else
                 {
                     ++(sss->stats.broadcast);
+                    ++bc_count;
                     traceEvent(TRACE_DEBUG, "multicast %lu to %s %s",
                                pktsize,
                                sock_to_cstr( sockbuf, &(scan->sock) ),
@@ -1481,6 +1499,7 @@ static int try_broadcast( n2n_sn_t * sss,
                 else
                 {
                     ++(sss->stats.broadcast);
+                    ++bc_count;
                     traceEvent(TRACE_DEBUG, "multicast %lu to %s %s",
                                pktsize,
                                sock_to_cstr( sockbuf, &(scan->sock6) ),
@@ -1491,6 +1510,9 @@ static int try_broadcast( n2n_sn_t * sss,
 
         scan = scan->next;
     }
+
+    if (bc_count > 0 && cs)
+        update_community_traffic(cs, pktsize * bc_count, now);
 
     return 0;
 }
@@ -1891,6 +1913,41 @@ static int process_udp( n2n_sn_t * sss,
         uint32_t use_requested_ip = reg.dev_addr.net_addr;
         uint8_t use_request_ip = 1; /* always assign IP (auto-assign if net_addr==0) */
 
+        /* 检查 IP 冲突：相同社区内，相同的 IP 是否已被不同 MAC 的节点占用 */
+        if (use_request_ip && use_requested_ip != 0) {
+            struct peer_info *ck = sss->edges;
+            while (ck) {
+                if (ck->assigned_ip == use_requested_ip &&
+                    memcmp(ck->community_name, cmn.community, sizeof(n2n_community_t)) == 0 &&
+                    memcmp(ck->mac_addr, reg.edgeMac, sizeof(n2n_mac_t)) != 0) {
+                    n2n_common_t nak_cmn;
+                    n2n_REGISTER_SUPER_NAK_t nak;
+
+                    memset(&nak_cmn, 0, sizeof(nak_cmn));
+                    nak_cmn.ttl = N2N_DEFAULT_TTL;
+                    nak_cmn.pc = n2n_register_super_nak;
+                    nak_cmn.flags = N2N_FLAGS_FROM_SUPERNODE;
+                    memcpy(nak_cmn.community, cmn.community, sizeof(n2n_community_t));
+                    memcpy(&nak.cookie, &reg.cookie, sizeof(n2n_cookie_t));
+
+                    encx = 0;
+                    encode_REGISTER_SUPER_NAK(ackbuf, &encx, &nak_cmn, &nak);
+
+                    SOCKET send_sock = (sender_sock->sa_family == AF_INET6) ? sss->sock6 : sss->sock;
+                    socklen_t sock_len = (sender_sock->sa_family == AF_INET6) ?
+                                         sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+                    sendto(send_sock, ackbuf, encx, 0, (struct sockaddr *)sender_sock, sock_len);
+
+                    ++(sss->stats.reg_super_nak);
+                    traceEvent(TRACE_WARNING, "IP %u.%u.%u.%u already used by another edge, sending NAK",
+                               (use_requested_ip>>24)&0xFF, (use_requested_ip>>16)&0xFF,
+                               (use_requested_ip>>8)&0xFF, use_requested_ip&0xFF);
+                    return 0;
+                }
+                ck = ck->next;
+            }
+        }
+
         const n2n_sock_t *local_sock_ptr = (reg.aflags & N2N_AFLAGS_LOCAL_SOCKET) ? &reg.local_sock : NULL;
         uint8_t local_sock_ena = (reg.aflags & N2N_AFLAGS_LOCAL_SOCKET) ? 1 : 0;
 
@@ -2264,8 +2321,10 @@ static int run_loop( n2n_sn_t * sss )
             max_sock = max(max_sock, sss->sock6);
         }
 
-        FD_SET(sss->mgmt_sock, &socket_mask);
-        max_sock = max(max_sock, sss->mgmt_sock);
+        if (sss->mgmt_sock != -1) {
+            FD_SET(sss->mgmt_sock, &socket_mask);
+            max_sock = max(max_sock, sss->mgmt_sock);
+        }
 
         wait_time.tv_sec = 10; /* 10-second timeout */
         wait_time.tv_usec = 0;

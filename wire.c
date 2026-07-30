@@ -454,6 +454,17 @@ size_t encode_REGISTER_SUPER_ACK( uint8_t * base,
     return retval;
 }
 
+size_t encode_REGISTER_SUPER_NAK( uint8_t * base,
+                                   size_t * idx,
+                                   const n2n_common_t * common,
+                                   const n2n_REGISTER_SUPER_NAK_t * nak )
+{
+    size_t retval = 0;
+    retval += encode_common( base, idx, common );
+    retval += encode_buf( base, idx, nak->cookie, N2N_COOKIE_SIZE );
+    return retval;
+}
+
 size_t decode_REGISTER_SUPER_ACK( n2n_REGISTER_SUPER_ACK_t * reg,
                                const n2n_common_t * cmn, /* info on how to interpret it */
                                const uint8_t * base,

@@ -358,6 +358,11 @@ size_t encode_REGISTER_SUPER_ACK( uint8_t * base,
                                const n2n_common_t * cmn,
                                const n2n_REGISTER_SUPER_ACK_t * reg );
 
+size_t encode_REGISTER_SUPER_NAK( uint8_t * base,
+                               size_t * idx,
+                               const n2n_common_t * cmn,
+                               const n2n_REGISTER_SUPER_NAK_t * nak );
+
 size_t decode_REGISTER_SUPER_ACK( n2n_REGISTER_SUPER_ACK_t * reg,
                                const n2n_common_t * cmn, /* info on how to interpret it */
                                const uint8_t * base,
