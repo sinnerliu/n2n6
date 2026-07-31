@@ -1130,7 +1130,7 @@ static void set_localip( n2n_edge_t * eee )
         memset(&sa_sn, 0, sizeof(sa_sn));
         sa_sn.sin_family = AF_INET;
         sa_sn.sin_port = htons(53);
-        sa_sn.sin_addr.s_addr = inet_addr("8.8.8.8");
+        sa_sn.sin_addr.s_addr = inet_addr("223.6.6.6");
     }
     if (connect(fd, (struct sockaddr*)&sa_sn, sizeof(sa_sn)) == 0 &&
         getsockname(fd, (struct sockaddr*)&sa, &sa_len) == 0 &&
@@ -1235,8 +1235,15 @@ static void set_localip( n2n_edge_t * eee )
         freeifaddrs(ifaddr);
     }
 #endif
-    if (eee->local_socks_count > 0)
+    if (eee->local_socks_count > 0) {
         traceEvent(TRACE_NORMAL, "Found %d additional local IP(s)", eee->local_socks_count);
+        if (!eee->local_sock_ena) {
+            eee->local_sock = eee->local_socks[0];
+            eee->local_sock_ena = 1;
+            traceEvent(TRACE_NORMAL, "Fallback: Using first additional local IP as main: %s",
+                       sock_to_cstr(sockbuf, &eee->local_sock));
+        }
+    }
 }
 
 /** Send a QUERY_PEER packet to supernode asking for target's address. */
