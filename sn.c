@@ -838,18 +838,19 @@ static int update_edge( n2n_sn_t * sss,
         {
             struct in_addr vip_addr;
             vip_addr.s_addr = htonl(scan->assigned_ip);
-            char addr_buf[64];
+            char wan_buf[64] = "-", lan_buf[64] = "-";
             if (scan->sock.family == AF_INET)
-                sock_to_cstr(addr_buf, &scan->sock);
+                sock_to_cstr(wan_buf, &scan->sock);
             else if (scan->sock6.family == AF_INET6)
-                sock_to_cstr(addr_buf, &scan->sock6);
-            else
-                strcpy(addr_buf, "-");
-            traceEvent( TRACE_NORMAL, "update_edge created   %s vip=%s ==> %s%s",
+                sock_to_cstr(wan_buf, &scan->sock6);
+            
+            if (scan->num_sockets > 1 && scan->sockets[1].family != 0)
+                sock_to_cstr(lan_buf, &scan->sockets[1]);
+
+            traceEvent( TRACE_NORMAL, "update_edge created   %s vip=%s ==> WAN=%s LAN=%s",
                         macaddr_str( mac_buf, edgeMac ),
                         inet_ntoa(vip_addr),
-                        addr_buf,
-                        scan->num_sockets > 1 ? " (LAN)" : "" );
+                        wan_buf, lan_buf );
         }
 
         scan->last_seen = now;
@@ -973,10 +974,6 @@ static int update_edge( n2n_sn_t * sss,
                 scan->os_name[sizeof(scan->os_name) - 1] = '\0';
             }
 
-            traceEvent( TRACE_INFO, "update_edge updated   %s ==> %s",
-                        macaddr_str( mac_buf, edgeMac ),
-                        sock_to_cstr( sockbuf, sender_sock ) );
-
             /* Build sockets array for hole-punching.
             * sockets[0] = primary (connect_family), sock6 = IPv6 (if available) */
             scan->num_sockets = 0;
@@ -989,6 +986,21 @@ static int update_edge( n2n_sn_t * sss,
             }
             if (local_sock_ena && local_sock) {
                 scan->sockets[scan->num_sockets++] = *local_sock;
+            }
+
+            {
+                char wan_buf[64] = "-", lan_buf[64] = "-";
+                if (scan->sock.family == AF_INET)
+                    sock_to_cstr(wan_buf, &scan->sock);
+                else if (scan->sock6.family == AF_INET6)
+                    sock_to_cstr(wan_buf, &scan->sock6);
+                
+                if (scan->num_sockets > 1 && scan->sockets[1].family != 0)
+                    sock_to_cstr(lan_buf, &scan->sockets[1]);
+
+                traceEvent( TRACE_INFO, "update_edge updated   %s ==> WAN=%s LAN=%s",
+                            macaddr_str( mac_buf, edgeMac ),
+                            wan_buf, lan_buf );
             }
 
             scan->last_seen = now;

@@ -1150,10 +1150,10 @@ static void set_localip( n2n_edge_t * eee )
     closesocket(fd);
 
     if (eee->local_sock_ena)
-        traceEvent(TRACE_NORMAL, "Local lan socket: %s",
+        traceEvent(TRACE_NORMAL, "Found physical LAN IP (excluding edge virtual IP): %s",
                    sock_to_cstr(sockbuf, &eee->local_sock));
     else
-        traceEvent(TRACE_WARNING, "set_localip: no private lan address found");
+        traceEvent(TRACE_WARNING, "set_localip: no private LAN address found (excluding edge virtual IP)");
     
     /* Collect additional local IPs for multi-homed hosts */
     eee->local_socks_count = 0;
@@ -1276,6 +1276,9 @@ static void send_register_super( n2n_edge_t * eee,
     n2n_common_t cmn;
     n2n_REGISTER_SUPER_t reg;
     n2n_sock_str_t sockbuf;
+
+    /* 每次上报给 supernode 之前，自动重新扫描探测物理/逻辑网卡内网 IP，确保排除 edge 自身 tuntap 虚拟 IP */
+    set_localip(eee);
 
     memset(&cmn, 0, sizeof(cmn) );
     memset(&reg, 0, sizeof(reg) );
