@@ -1150,7 +1150,7 @@ static void set_localip( n2n_edge_t * eee )
     closesocket(fd);
 
     if (eee->local_sock_ena)
-        traceEvent(TRACE_NORMAL, "Found physical LAN IP (excluding edge virtual IP): %s",
+        traceEvent(TRACE_INFO, "Found physical LAN IP (excluding edge virtual IP): %s",
                    sock_to_cstr(sockbuf, &eee->local_sock));
     else
         traceEvent(TRACE_WARNING, "set_localip: no private LAN address found (excluding edge virtual IP)");
@@ -1236,7 +1236,7 @@ static void set_localip( n2n_edge_t * eee )
     }
 #endif
     if (eee->local_socks_count > 0) {
-        traceEvent(TRACE_NORMAL, "Found %d additional local IP(s)", eee->local_socks_count);
+        traceEvent(TRACE_INFO, "Found %d additional local IP(s)", eee->local_socks_count);
         if (!eee->local_sock_ena) {
             eee->local_sock = eee->local_socks[0];
             eee->local_sock_ena = 1;
